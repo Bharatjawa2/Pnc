@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>3D Viewer — Axis Controls</title>
+  <style>
+    html,body { height:100%; margin:0; font-family: Inter, system-ui, Arial, sans-serif; background:#f8fafc; color:#111; }
+    #canvas-container { width:100%; height:100vh; overflow:hidden; position:relative; }
+    #header { position:absolute; top:0; left:0; width:100%; height:68px; background:white; box-shadow:0 2px 6px rgba(0,0,0,0.08); display:flex; align-items:center; justify-content:space-between; padding:0 18px; z-index:25; }
+    #controls { position:absolute; right:18px; top:86px; display:flex; gap:8px; z-index:30; flex-wrap:wrap; }
+    .ctrl-btn { padding:10px 12px; background:white; border-radius:8px; border:1px solid #ddd; cursor:pointer; font-weight:700; box-shadow:0 6px 18px rgba(0,0,0,0.06); }
+    .ctrl-btn.on { background:#3b82f6; color:white; border-color:#2563eb; }
+    #file-label { background:#10b981; color:white; padding:8px 12px; border-radius:8px; cursor:pointer; font-weight:700; }
+    #file-name { font-size:13px; color:#374151; margin-left:12px; }
+    .panel { position:absolute; left:18px; top:86px; z-index:30; background:white; border:1px solid #e5e7eb; border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,0.06); padding:12px 14px; min-width:320px; }
+    .row { display:flex; gap:8px; align-items:center; margin:6px 0; }
+    .row label { font-size:13px; color:#374151; }
+    .row input[type="number"] { width:92px; padding:6px 8px; border:1px solid #d1d5db; border-radius:8px; }
+    .muted { color:#6b7280; font-size:12px; }
+    hr { border:none; height:1px; background:#e5e7eb; margin:10px 0; }
+  </style>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="header">
+    <div style="display:flex; align-items:center; gap:12px;">
+      <div style="font-weight:800; font-size:18px;">TERAFAC</div>
+      <label id="file-label" for="file-input" style="margin-left:12px;">Import OBJ</label>
+      <input id="file-input" type="file" accept=".obj" style="display:none" />
+      <div id="file-name">No file loaded</div>
+    </div>
+    <div style="padding-right:18px"></div>
+  </div>
+
+  <div class="panel">
+    <div class="row"><strong>Basis (choose X &amp; Z):</strong></div>
+    <div class="row">
+      <label>X</label>
+      <select id="sel-x">
+        <option>+X</option><option>-X</option>
+        <option>+Y</option><option>-Y</option>
+        <option>+Z</option><option selected>-Z</option>
+      </select>
+      <span id="x-info" class="muted"></span>
+    </div>
+    <div class="row">
+      <label>Z</label>
+      <select id="sel-z">
+        <option>+X</option><option>-X</option>
+        <option>+Y</option><option selected>-Y</option>
+        <option>+Z</option><option>-Z</option>
+      </select>
+      <span id="z-info" class="muted"></span>
+    </div>
+    <div class="row"><label>Y = X × Z</label><span id="y-info" class="muted"></span></div>
+    <hr/>
+
+    <div class="row"><strong>Start A</strong></div>
+    <div class="row">
+      <input id="startA-x" type="number" step="0.001" placeholder="x">
+      <input id="startA-y" type="number" step="0.001" placeholder="y">
+      <input id="startA-z" type="number" step="0.001" placeholder="z">
+      <button id="btn-set-startA" class="ctrl-btn">Set A</button>
+    </div>
+    <div class="row">
+      <label><input id="chkA-outer" type="checkbox"> Mark A as <b>Outer</b></label>
+      <span id="startA-info" class="muted">—</span>
+    </div>
+
+    <div class="row" style="margin-top:8px;"><strong>Start B</strong></div>
+    <div class="row">
+      <input id="startB-x" type="number" step="0.001" placeholder="x">
+      <input id="startB-y" type="number" step="0.001" placeholder="y">
+      <input id="startB-z" type="number" step="0.001" placeholder="z">
+      <button id="btn-set-startB" class="ctrl-btn">Set B</button>
+    </div>
+    <div class="row">
+      <label><input id="chkB-outer" type="checkbox"> Mark B as <b>Outer</b></label>
+      <span id="startB-info" class="muted">—</span>
+    </div>
+
+    <div class="row" style="margin-top:6px;">
+      <span class="muted">Tip: <b>Shift+Click</b> in the viewport to place a global start (in the air).</span>
+    </div>
+    <div class="row"><span id="start-global-info" class="muted">—</span></div>
+    <hr/>
+
+    <div class="row">
+      <button id="btn-compute" class="ctrl-btn">Compute 8 Points</button>
+      <button id="btn-export" class="ctrl-btn">Export JSON</button>
+      <span id="compute-status" class="muted">—</span>
+    </div>
+  </div>
+
+  <div id="controls">
+    <button id="btn-all" class="ctrl-btn">Show All Axis Lines</button>
+    <button id="btn-hit" class="ctrl-btn">Show Hit Axis Lines</button>
+  </div>
+
+  <div id="canvas-container"></div>
+
+  <!-- Your logic file -->
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
