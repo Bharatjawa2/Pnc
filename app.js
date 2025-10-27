@@ -6,6 +6,7 @@ import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 const container = document.getElementById('canvas-container');
 const fileInput = document.getElementById('file-input');
 const fileNameLabel = document.getElementById('file-name');
+const btnSendToVision = document.getElementById('btn-send-vision');
 
 const btnAll = document.getElementById('btn-all');
 const btnHit = document.getElementById('btn-hit');
@@ -745,6 +746,53 @@ btnExport.addEventListener('click', ()=>{
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href = url; a.download = 'weld_points.json'; a.click();
   URL.revokeObjectURL(url);
+});
+
+btnSendToVision.addEventListener('click', async () => {
+  if (!lastResultJSON) {
+    alert('Compute first.');
+    return;
+  }
+  const VISION_SERVER = 'http://192.168.31.58:5002'; // Your vision_mock.py server
+  
+  try {
+    // Transform to the format vision_mock expects
+    const payload = {
+      frame: 'base', // or 'object' if needed
+      data: {
+        cycle_id: `PNC_${Date.now()}`,
+        project_id: 'PNC_MANUAL'
+      },
+      segments: [] // We'll populate this
+    };
+
+    // Convert your touch points to segments format
+    // Example for A endpoint (you'll need to add B and create proper segments)
+    payload.segments.push({
+      start: lastResultJSON.A.start,
+      end: lastResultJSON.A.touch_X,
+      q: [0.02875, -0.90542, 0.02327, -0.42289], // Your quaternion
+      touchsense: true
+    });
+    
+    // Add more segments for Y, Z, and B endpoint...
+
+    const response = await fetch(`${VISION_SERVER}/api/welding_data`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (response.ok) {
+      alert('✅ Sent to vision server!');
+      console.log('Response:', await response.json());
+    } else {
+      alert('❌ Failed to send: ' + response.statusText);
+    }
+  } catch (err) {
+    alert('❌ Error: ' + err.message);
+    console.error(err);
+  }
 });
 
 /* ---------- resize + animate ---------- */
