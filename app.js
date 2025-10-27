@@ -741,12 +741,14 @@ function buildPathPlanEntry(pkt) {
 //     })()
 //   };
 lastResultJSON = {
-  welding_data: {
-    edges: {}, // you asked to always name edge "Mock_edge" inside path_plan entries
-    path_plan: [
-      buildPathPlanEntry(packetA),
-      buildPathPlanEntry(packetB)
-    ]
+    data:{
+    welding_data: {
+        edges: {}, // you asked to always name edge "Mock_edge" inside path_plan entries
+        path_plan: [
+        buildPathPlanEntry(packetA),
+        buildPathPlanEntry(packetB)
+        ]
+    }
   }
 };
   computeStatus.textContent = 'Computed. Outer X uses 3-step (YZ locked at endpoint).';
