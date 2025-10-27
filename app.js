@@ -6,7 +6,6 @@ import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 const container = document.getElementById('canvas-container');
 const fileInput = document.getElementById('file-input');
 const fileNameLabel = document.getElementById('file-name');
-const btnSendToVision = document.getElementById('btn-send-vision');
 
 const btnAll = document.getElementById('btn-all');
 const btnHit = document.getElementById('btn-hit');
@@ -78,9 +77,14 @@ const startMarkers = { A: null, B: null };
 const manualOuter = { A: false, B: false };
 
 /* ---------- basis (user) ---------- */
-const currentBasis = { x: new THREE.Vector3(0,1,0), z: new THREE.Vector3(0,0,-1), y: new THREE.Vector3() };
-selX.value = "-Z"; selZ.value = "-Y";
-currentBasis.y.copy(currentBasis.x).cross(currentBasis.z).normalize();
+const currentBasis = {
+  x: new THREE.Vector3(1, 0, 0), // forward
+  z: new THREE.Vector3(0, 0, 1),  // up
+  y: new THREE.Vector3()          // left = x × z
+};
+selX.value = "+X"; selZ.value = "+Z";
+currentBasis.y.copy(currentBasis.z).cross(currentBasis.x).normalize();
+refreshBasisUI();
 function fmt(n){ return (Math.round(n*1000)/1000).toFixed(3); }
 
 /* ---------- UI helpers ---------- */
@@ -188,118 +192,7 @@ function computeBuffer(hitDist, diag, INF){
   return buffer;
 }
 
-/* ---------- Y (outer) three-step with Step-2 extension ---------- */
-function computeYOuterThreeStep(
-  startOrigin,
-  endpointPos,
-  basis,
-  targets,
-  sceneBox,
-  diag,
-  INF = 5000,
-  collideXRawFromStart = null
-) {
-  const Y = basis.y.clone().normalize();
-  const X = basis.x.clone().normalize();
-
-  // ---- decide inward/outward on Y, using the start point ----
-  const hitYplus  = firstHitAlong(startOrigin,  Y, targets);
-  const hitYminus = firstHitAlong(startOrigin,  Y.clone().negate(), targets);
-
-  let inwardDir;
-  if (hitYplus && hitYminus)
-    inwardDir = (hitYplus.distance <= hitYminus.distance) ? Y : Y.clone().negate();
-  else if (hitYplus)  inwardDir = Y;
-  else if (hitYminus) inwardDir = Y.clone().negate();
-  else                inwardDir = Y;
-
-  const outwardDir = inwardDir.clone().negate();
-
-  // ---- STEP 1: go outward in Y, but LOCK XZ to the endpoint ----
-//   // Build the anchor at endpoint.XZ + start.Y, then push outward on Y
-//   const anchor = new THREE.Vector3(endpointPos.x, startOrigin.y, endpointPos.z);
-//   let step1;
-//   const outBox = intersectSceneBox(anchor, outwardDir, sceneBox);
-//   if (outBox) {
-//     const extra = Math.max(diag * 0.05, 5);
-//     step1 = outBox.clone().add(outwardDir.clone().multiplyScalar(extra));
-//   } else {
-//     step1 = anchor.clone().add(outwardDir.clone().multiplyScalar(INF * 0.3));
-//   }
-    const outBox = intersectSceneBox(startOrigin, outwardDir, sceneBox);
-    let step1;
-    if (outBox) {
-        const extra = Math.max(diag * 0.05, 5);
-        step1 = outBox.clone().add(outwardDir.clone().multiplyScalar(extra));
-    }else{
-        step1 = startOrigin.clone().add(outwardDir.clone().multiplyScalar(INF * 0.3));
-    }
-
-  // ---- STEP 2: move ALONG +/−X ONLY, past the X wall by +20 mm in same direction ----
-  let collideXPoint = collideXRawFromStart;
-  if (!collideXPoint) {
-    // If not provided, compute from step1 (but normally we pass it from X pass at start)
-    const pxTmp = computeAxisSearchFrom(step1, X, targets, sceneBox, diag, INF);
-    collideXPoint = pxTmp.rawCollision.clone();
-  }
-
-  // scalar positions along X axis
-  const tStep1 = step1.dot(X);
-  const tWallX = collideXPoint.dot(X);
-  const delta  = tWallX - tStep1;                // signed distance along +X
-  const sign   = (delta >= 0) ? 1 : -1;
-
-  const EXTRA_X_MM = 5.0;                       // << move 20 mm further in the SAME X direction
-  const moveXMag   = Math.abs(delta) + EXTRA_X_MM;
-
-  const step2 = step1.clone().add(X.clone().multiplyScalar(sign * moveXMag));
-
-  // ---- STEP 3: from step2, cast along ±Y; choose collision that best targets the endpoint’s Y ----
-  const projY = p => p.dot(Y);
-  const yEnd  = projY(endpointPos);
-
-  const hitPlus  = firstHitAlong(step2,  Y, targets);
-  const hitMinus = firstHitAlong(step2,  Y.clone().negate(), targets);
-
-  let chosenHit = null;
-  let chosenDir = null;
-
-  if (hitPlus && hitMinus) {
-    const yPlus  = projY(hitPlus.point);
-    const yMinus = projY(hitMinus.point);
-    const ePlus  = Math.abs(yPlus  - yEnd);
-    const eMinus = Math.abs(yMinus - yEnd);
-    if (ePlus < eMinus || (ePlus === eMinus && hitPlus.distance <= hitMinus.distance)) {
-      chosenHit = hitPlus;  chosenDir = Y;
-    } else {
-      chosenHit = hitMinus; chosenDir = Y.clone().negate();
-    }
-  } else if (hitPlus)  { chosenHit = hitPlus;  chosenDir = Y; }
-    else if (hitMinus) { chosenHit = hitMinus; chosenDir = Y.clone().negate(); }
-    else {
-      // Fallback: straight to bbox from step2, still along ±Y
-      const altPlus  = intersectSceneBox(step2,  Y, sceneBox);
-      const altMinus = intersectSceneBox(step2,  Y.clone().negate(), sceneBox);
-      if (altPlus || altMinus) {
-        const p = altPlus ? altPlus : altMinus;
-        const d = altPlus ? Y : Y.clone().negate();
-        const rawCollision = p.clone();
-        const search_point = rawCollision.clone().add(d.multiplyScalar(5.0));
-        return { step1, step2, rawCollision, search_point };
-      }
-      // nothing to collide with
-      console.warn('No ±Y collision from step2; geometry may be open.');
-      return { step1, step2, rawCollision: step2.clone(), search_point: step2.clone() };
-    }
-
-  // collision from step2 along chosen Y
-  const rawCollision = chosenHit.point.clone();
-  const search_point = rawCollision.clone().add(chosenDir.multiplyScalar(5.0)); // +5 mm past face
-
-  return { step1, step2, rawCollision, search_point };
-}
-
-/* ---------- core single-step (X and Z; also Y for inner) ---------- */
+/* ---------- core single-step (X, Y, Z) ---------- */
 function computeAxisSearchFrom(origin, axisDir, targets, sceneBox, diag, INF){
   const dirPos = axisDir.clone().normalize();
   const dirNeg = dirPos.clone().negate();
@@ -329,21 +222,111 @@ function computeAxisSearchFrom(origin, axisDir, targets, sceneBox, diag, INF){
   return { rawCollision: raw, search_point, dir: chosen.dir.clone(), buffer: buf };
 }
 
+/* ---------- X (outer) three-step ----------
+   STEP 1: outward in X (YZ locked to endpoint)
+   STEP 2: move along ±Z only, +20 mm past wall in same direction
+   STEP 3: from step2 cast along ±X targeting endpoint’s X
+------------------------------------------- */
+function computeXOuterThreeStep(
+  startOrigin,
+  endpointPos,
+  basis,
+  targets,
+  sceneBox,
+  diag,
+  INF = 5000,
+  collideZRawFromStart = null
+){
+  const X = basis.x.clone().normalize();
+  const Z = basis.z.clone().normalize();
+
+  // determine inward/outward on X from start
+  const hitXplus  = firstHitAlong(startOrigin,  X, targets);
+  const hitXminus = firstHitAlong(startOrigin,  X.clone().negate(), targets);
+  let inwardDir;
+  if (hitXplus && hitXminus)
+    inwardDir = (hitXplus.distance <= hitXminus.distance) ? X : X.clone().negate();
+  else if (hitXplus)  inwardDir = X;
+  else if (hitXminus) inwardDir = X.clone().negate();
+  else                inwardDir = X;
+  const outwardDir = inwardDir.clone().negate();
+
+  // STEP 1: outward in X with YZ locked to endpoint
+  const outBox = intersectSceneBox(startOrigin, outwardDir, sceneBox);
+    let step1;
+    if (outBox) {
+        const extra = Math.max(diag * 0.05, 5);
+        step1 = outBox.clone().add(outwardDir.clone().multiplyScalar(extra));
+    }else{
+        step1 = startOrigin.clone().add(outwardDir.clone().multiplyScalar(INF * 0.3));
+    }
+
+  // STEP 2: pure Z move to Z wall + 20 mm
+  let collideZPoint = collideZRawFromStart;
+  if (!collideZPoint) {
+    const pzTmp = computeAxisSearchFrom(step1, Z, targets, sceneBox, diag, INF);
+    collideZPoint = pzTmp.rawCollision.clone();
+  }
+  const tStep1 = step1.dot(Z);
+  const tWallZ = collideZPoint.dot(Z);
+  const delta  = tWallZ - tStep1;
+  const sign   = (delta >= 0) ? 1 : -1;
+  const EXTRA_Z_MM = 2.0;
+  const moveZMag   = Math.abs(delta) + EXTRA_Z_MM;
+  const step2 = step1.clone().add(Z.clone().multiplyScalar(sign * moveZMag));
+
+  // STEP 3: ±X cast best matching endpoint.x
+  const projX = p => p.dot(X);
+  const xEnd  = projX(endpointPos);
+  const hitPlus  = firstHitAlong(step2,  X, targets);
+  const hitMinus = firstHitAlong(step2,  X.clone().negate(), targets);
+
+  let chosenHit = null, chosenDir = null;
+  if (hitPlus && hitMinus) {
+    const xPlus  = projX(hitPlus.point);
+    const xMinus = projX(hitMinus.point);
+    const ePlus  = Math.abs(xPlus  - xEnd);
+    const eMinus = Math.abs(xMinus - xEnd);
+    if (ePlus < eMinus || (ePlus === eMinus && hitPlus.distance <= hitMinus.distance)) {
+      chosenHit = hitPlus;  chosenDir = X;
+    } else {
+      chosenHit = hitMinus; chosenDir = X.clone().negate();
+    }
+  } else if (hitPlus)  { chosenHit = hitPlus;  chosenDir = X; }
+    else if (hitMinus) { chosenHit = hitMinus; chosenDir = X.clone().negate(); }
+    else {
+      const altPlus  = intersectSceneBox(step2,  X, sceneBox);
+      const altMinus = intersectSceneBox(step2,  X.clone().negate(), sceneBox);
+      if (altPlus || altMinus) {
+        const p = altPlus ? altPlus : altMinus;
+        const d = altPlus ? X : X.clone().negate();
+        const rawCollision = p.clone();
+        const search_point = rawCollision.clone().add(d.multiplyScalar(5.0));
+        return { step1, step2, rawCollision, search_point };
+      }
+      console.warn('No ±X collision from step2; geometry may be open.');
+      return { step1, step2, rawCollision: step2.clone(), search_point: step2.clone() };
+    }
+
+  const rawCollision = chosenHit.point.clone();
+  const search_point = rawCollision.clone().add(chosenDir.multiplyScalar(5.0));
+  return { step1, step2, rawCollision, search_point };
+}
+
 /* ---------- packet computation ---------- */
 function computePacketForEndpoint(startOrigin, endpointPos, targets, basis, flags){
   const sceneBox = computeCombinedBox(targets);
   const INF = 5000;
   const diag = sceneBox ? sceneBox.getSize(new THREE.Vector3()).length() : INF;
 
-  // X and Z (single-step from startOrigin)
-  const px = computeAxisSearchFrom(startOrigin, basis.x, targets, sceneBox, diag, INF);
+  // Z is always single-step from start
   const pz = computeAxisSearchFrom(startOrigin, basis.z, targets, sceneBox, diag, INF);
 
-  // Y:
-  let py, yStepsInfo=null, isOuterY=false;
+  // X: single-step, unless we force Outer-X 3-step
+  let px, xStepsInfo=null, isOuterX=false;
   if (flags.forceOuter) {
-    isOuterY = true;
-    const y3 = computeYOuterThreeStep(
+    isOuterX = true;
+    const x3 = computeXOuterThreeStep(
       startOrigin,
       endpointPos,
       basis,
@@ -351,21 +334,24 @@ function computePacketForEndpoint(startOrigin, endpointPos, targets, basis, flag
       sceneBox,
       diag,
       INF,
-      px.rawCollision.clone()   // X raw collision from the same start
+      pz.rawCollision.clone() // use same-start Z raw as a hint
     );
-    py = { rawCollision: y3.rawCollision, search_point: y3.search_point };
-    yStepsInfo = { step1: y3.step1, step2: y3.step2 };
+    px = { rawCollision: x3.rawCollision, search_point: x3.search_point };
+    xStepsInfo = { step1: x3.step1, step2: x3.step2 };
   } else {
-    py = computeAxisSearchFrom(startOrigin, basis.y, targets, sceneBox, diag, INF);
+    px = computeAxisSearchFrom(startOrigin, basis.x, targets, sceneBox, diag, INF);
   }
+
+  // Y stays single-step
+  const py = computeAxisSearchFrom(startOrigin, basis.y, targets, sceneBox, diag, INF);
 
   return {
     start: startOrigin.clone(),
     touch_X: px.search_point.clone(), raw_X: px.rawCollision.clone(),
     touch_Y: py.search_point.clone(), raw_Y: py.rawCollision.clone(),
     touch_Z: pz.search_point.clone(), raw_Z: pz.rawCollision.clone(),
-    isOuterY,
-    ySteps: yStepsInfo
+    isOuterX,
+    xSteps: xStepsInfo
   };
 }
 
@@ -390,15 +376,15 @@ function showPacket(name, pkt){
   if(!dashedGroup) dashedGroup = new THREE.Group();
 
   const baseColorsInner = { X:0xff0000, Y:0x00a65a, Z:0x0066ff };
-  const baseColorsOuterY = { X:0xff6b00, Y:0xff2e00, Z:0x00d0ff };
-  const colors = pkt.isOuterY ? baseColorsOuterY : baseColorsInner;
+  const baseColorsOuterX = { X:0xff2e00, Y:0x00a65a, Z:0x00d0ff };
+  const colors = pkt.isOuterX ? baseColorsOuterX : baseColorsInner;
 
   // start marker
-  const startColor = pkt.isOuterY ? 0xb91c1c : 0x2563eb;
+  const startColor = pkt.isOuterX ? 0xb91c1c : 0x2563eb;
   const s = new THREE.Mesh(new THREE.SphereGeometry(0.058,14,12), new THREE.MeshBasicMaterial({ color:startColor }));
   s.position.copy(pkt.start); axisMarkersGroup.add(s);
 
-  // helper: dashed to search, red to raw (except Y when outer)
+  // helper for normal axis drawing (dashed to touch, red to raw, markers + label)
   const drawAxis = (axisKey, color) => {
     const touch = pkt[`touch_${axisKey}`], raw = pkt[`raw_${axisKey}`];
 
@@ -407,11 +393,9 @@ function showPacket(name, pkt){
     const mat  = new THREE.LineDashedMaterial({ color:0x666666, dashSize:0.12, gapSize:0.22 });
     const dashed = new THREE.Line(geom, mat); dashed.computeLineDistances(); dashedGroup.add(dashed);
 
-    // raw (solid red) — skip start→raw for Y when outer to avoid the duplicate red leg
-    if (!(pkt.isOuterY && axisKey === 'Y')) {
-      const g2 = new THREE.BufferGeometry().setFromPoints([ pkt.start.clone(), raw.clone() ]);
-      const l2 = new THREE.Line(g2, new THREE.LineBasicMaterial({ color:0xff0000 })); axisMarkersGroup.add(l2);
-    }
+    // solid red start → raw
+    const g2 = new THREE.BufferGeometry().setFromPoints([ pkt.start.clone(), raw.clone() ]);
+    const l2 = new THREE.Line(g2, new THREE.LineBasicMaterial({ color:0xff0000 })); axisMarkersGroup.add(l2);
 
     // collide and search markers
     const hitS = new THREE.Mesh(new THREE.SphereGeometry(0.04,12,10), new THREE.MeshBasicMaterial({ color:0xff0000 })); 
@@ -427,42 +411,42 @@ function showPacket(name, pkt){
     axisMarkersGroup.add(label); selectedLabels.push(label);
   };
 
-  // X and Z normal
-  drawAxis('X', colors.X);
+  // Draw Z and Y normally
   drawAxis('Z', colors.Z);
+  drawAxis('Y', colors.Y);
 
-  // Y: inner -> normal; outer -> special legs + red only from step2 to raw
-  if (!pkt.isOuterY) {
-    drawAxis('Y', colors.Y);
+  // X: normal or 3-step outer
+  if (!pkt.isOuterX) {
+    drawAxis('X', colors.X);
   } else {
-    // legs: Step1 (amber), Step2 (orange), Step3 (purple)
-    const c1 = 0xffd34d, c2 = 0xff7b00, c3 = 0x7c3aed;
-    // ensure we have steps
-    if (pkt.ySteps) {
-      // Step1: start → step1
-      const g1 = new THREE.BufferGeometry().setFromPoints([ pkt.start.clone(), pkt.ySteps.step1.clone() ]);
+    const c1 = 0xffd34d, c2 = 0xff7b00, c3 = 0x7c3aed; // Step1, Step2, Step3
+    if (pkt.xSteps) {
+      // Step1: start → step1 (outward X with YZ locked)
+      const g1 = new THREE.BufferGeometry().setFromPoints([ pkt.start.clone(), pkt.xSteps.step1.clone() ]);
       axisMarkersGroup.add(new THREE.Line(g1, new THREE.LineBasicMaterial({ color:c1 })));
-      // Step2: step1 → step2 (pure X line)
-      const g2 = new THREE.BufferGeometry().setFromPoints([ pkt.ySteps.step1.clone(), pkt.ySteps.step2.clone() ]);
+
+      // Step2: step1 → step2 (pure Z)
+      const g2 = new THREE.BufferGeometry().setFromPoints([ pkt.xSteps.step1.clone(), pkt.xSteps.step2.clone() ]);
       axisMarkersGroup.add(new THREE.Line(g2, new THREE.LineBasicMaterial({ color:c2 })));
-      // Step3: step2 → touch_Y (purple)
-      const g3 = new THREE.BufferGeometry().setFromPoints([ pkt.ySteps.step2.clone(), pkt.touch_Y.clone() ]);
+
+      // Step3: step2 → touch_X (purple)
+      const g3 = new THREE.BufferGeometry().setFromPoints([ pkt.xSteps.step2.clone(), pkt.touch_X.clone() ]);
       axisMarkersGroup.add(new THREE.Line(g3, new THREE.LineBasicMaterial({ color:c3 })));
 
-      // raw (red) ONLY from step2 → raw_Y
-      const gRaw = new THREE.BufferGeometry().setFromPoints([ pkt.ySteps.step2.clone(), pkt.raw_Y.clone() ]);
-      axisMarkersGroup.add(new THREE.Line(gRaw, new THREE.LineBasicMaterial({ color:c3 })));
+      // raw (red) from step2 → raw_X
+      const gRaw = new THREE.BufferGeometry().setFromPoints([ pkt.xSteps.step2.clone(), pkt.raw_X.clone() ]);
+      axisMarkersGroup.add(new THREE.Line(gRaw, new THREE.LineBasicMaterial({ color:0xff0000 })));
     }
 
-    // markers for Y
+    // markers for X
     const hitS = new THREE.Mesh(new THREE.SphereGeometry(0.04,12,10), new THREE.MeshBasicMaterial({ color:0xff0000 })); 
-    hitS.position.copy(pkt.raw_Y); axisMarkersGroup.add(hitS);
+    hitS.position.copy(pkt.raw_X); axisMarkersGroup.add(hitS);
 
-    const spS  = new THREE.Mesh(new THREE.SphereGeometry(0.045,12,10),new THREE.MeshBasicMaterial({ color:colors.Y })); 
-    spS.position.copy(pkt.touch_Y); axisMarkersGroup.add(spS);
+    const spS  = new THREE.Mesh(new THREE.SphereGeometry(0.045,12,10), new THREE.MeshBasicMaterial({ color:colors.X })); 
+    spS.position.copy(pkt.touch_X); axisMarkersGroup.add(spS);
 
-    const label = createTextSprite(`${name}:Y → (${fmt(pkt.touch_Y.x)}, ${fmt(pkt.touch_Y.y)}, ${fmt(pkt.touch_Y.z)})`, 84, 'white');
-    label.position.copy(pkt.ySteps.step2.clone().add(pkt.touch_Y).multiplyScalar(0.5)).add(new THREE.Vector3(0,0.05,0)); 
+    const label = createTextSprite(`${name}:X → (${fmt(pkt.touch_X.x)}, ${fmt(pkt.touch_X.y)}, ${fmt(pkt.touch_X.z)})`, 84, 'white');
+    label.position.copy(pkt.xSteps.step2.clone().add(pkt.touch_X).multiplyScalar(0.5)).add(new THREE.Vector3(0,0.05,0)); 
     label.scale.setScalar(0.42);
     axisMarkersGroup.add(label); selectedLabels.push(label);
   }
@@ -611,12 +595,12 @@ function setStartFromInputs(which){
   }
   const p = new THREE.Vector3(x,y,z);
   starts[which] = p;
-  manualOuter[which] = document.getElementById(`chk${which}-outer`).checked;
+  manualOuter[which] = document.getElementById(`chk${which}-outer`).checked; // now means "Outer-X"
   if(startMarkers[which]){ scene.remove(startMarkers[which]); disposeObject(startMarkers[which]); }
   const col = manualOuter[which] ? 0xb91c1c : 0x2563eb; // outer=red-ish, inner=blue-ish
   startMarkers[which] = new THREE.Mesh(new THREE.SphereGeometry(0.055,12,10), new THREE.MeshBasicMaterial({ color: col }));
   startMarkers[which].position.copy(p); scene.add(startMarkers[which]);
-  document.getElementById(`start${which}-info`).textContent = `(${fmt(x)}, ${fmt(y)}, ${fmt(z)}) ${manualOuter[which] ? '· OUTER' : '· INNER'}`;
+  document.getElementById(`start${which}-info`).textContent = `(${fmt(x)}, ${fmt(y)}, ${fmt(z)}) ${manualOuter[which] ? '· OUTER-X' : '· INNER'}`;
 }
 btnSetStartA.addEventListener('click', ()=>setStartFromInputs('A'));
 btnSetStartB.addEventListener('click', ()=>setStartFromInputs('B'));
@@ -689,54 +673,83 @@ btnCompute.addEventListener('click', ()=>{
   showPacket('A', packetA);
   showPacket('B', packetB);
 
-  lastResultJSON = {
-  edge: {
-    endpointA: selectedVertexMeshes[0]?.position || null,
-    endpointB: selectedVertexMeshes[1]?.position || null
-  },
-  basis: {
-    X: { x: basis.x.x, y: basis.x.y, z: basis.x.z },
-    Y: { x: basis.y.x, y: basis.y.y, z: basis.y.z },
-    Z: { x: basis.z.x, y: basis.z.y, z: basis.z.z }
-  },
-  A: (() => {
-    const base = {
-      start:      { x: packetA.start.x,    y: packetA.start.y,    z: packetA.start.z },
-      collide_X:  { x: packetA.raw_X.x,    y: packetA.raw_X.y,    z: packetA.raw_X.z },
-      touch_X:    { x: packetA.touch_X.x,  y: packetA.touch_X.y,  z: packetA.touch_X.z },
-      collide_Y:  { x: packetA.raw_Y.x,    y: packetA.raw_Y.y,    z: packetA.raw_Y.z },    // step3 hit point
-      touch_Y:    { x: packetA.touch_Y.x,  y: packetA.touch_Y.y,  z: packetA.touch_Y.z },  // buffered “search_point”
-      collide_Z:  { x: packetA.raw_Z.x,    y: packetA.raw_Z.y,    z: packetA.raw_Z.z },
-      touch_Z:    { x: packetA.touch_Z.x,  y: packetA.touch_Z.y,  z: packetA.touch_Z.z },
-      isOuterY: packetA.isOuterY
-    };
-    if (packetA.isOuterY && packetA.ySteps) {
-      base.outerY_step1_stop = { x: packetA.ySteps.step1.x, y: packetA.ySteps.step1.y, z: packetA.ySteps.step1.z }; // after Step 1 (outward)
-      base.outerY_step2_stop = { x: packetA.ySteps.step2.x, y: packetA.ySteps.step2.y, z: packetA.ySteps.step2.z }; // after Step 2 (X-only move)
+  // ---- JSON helpers ----
+const v3 = (v) => [v.x, v.y, v.z];
+
+function buildPathPlanEntry(pkt) {
+  // If outer-X, X start_point is step2; otherwise use the endpoint's start.
+  const startCommon = v3(pkt.start);
+  const startX = (pkt.isOuterX && pkt.xSteps) ? v3(pkt.xSteps.step2) : startCommon;
+
+  return {
+    edge: "Mock_edge",
+    id: "",                       // empty, as requested
+    buffer_point: [],             // empty
+    torch_angle: [],              // empty
+    touch_order: ['x','z','y'],   // fixed order requested
+    touch: {
+      x: { start_point: startX,        end_point: v3(pkt.touch_X) },
+      y: { start_point: startCommon,   end_point: v3(pkt.touch_Y) },
+      z: { start_point: startCommon,   end_point: v3(pkt.touch_Z) },
     }
-    return base;
-  })(),
-  B: (() => {
-    const base = {
-      start:      { x: packetB.start.x,    y: packetB.start.y,    z: packetB.start.z },
-      collide_X:  { x: packetB.raw_X.x,    y: packetB.raw_X.y,    z: packetB.raw_X.z },
-      touch_X:    { x: packetB.touch_X.x,  y: packetB.touch_X.y,  z: packetB.touch_X.z },
-      collide_Y:  { x: packetB.raw_Y.x,    y: packetB.raw_Y.y,    z: packetB.raw_Y.z },    // step3 hit point
-      touch_Y:    { x: packetB.touch_Y.x,  y: packetB.touch_Y.y,  z: packetB.touch_Y.z },  // buffered “search_point”
-      collide_Z:  { x: packetB.raw_Z.x,    y: packetB.raw_Z.y,    z: packetB.raw_Z.z },
-      touch_Z:    { x: packetB.touch_Z.x,  y: packetB.touch_Z.y,  z: packetB.touch_Z.z },
-      isOuterY: packetB.isOuterY
-    };
-    if (packetB.isOuterY && packetB.ySteps) {
-      base.outerY_step1_stop = { x: packetB.ySteps.step1.x, y: packetB.ySteps.step1.y, z: packetB.ySteps.step1.z };
-      base.outerY_step2_stop = { x: packetB.ySteps.step2.x, y: packetB.ySteps.step2.y, z: packetB.ySteps.step2.z };
-    }
-    return base;
-  })()
+  };
+}
+
+//   lastResultJSON = {
+//     edge: {
+//       endpointA: selectedVertexMeshes[0]?.position || null,
+//       endpointB: selectedVertexMeshes[1]?.position || null
+//     },
+//     basis: {
+//       X: { x: basis.x.x, y: basis.x.y, z: basis.x.z },
+//       Y: { x: basis.y.x, y: basis.y.y, z: basis.y.z },
+//       Z: { x: basis.z.x, y: basis.z.y, z: basis.z.z }
+//     },
+//     A: (() => {
+//       const base = {
+//         start:      { x: packetA.start.x,    y: packetA.start.y,    z: packetA.start.z },
+//         collide_X:  { x: packetA.raw_X.x,    y: packetA.raw_X.y,    z: packetA.raw_X.z },
+//         touch_X:    { x: packetA.touch_X.x,  y: packetA.touch_X.y,  z: packetA.touch_X.z },
+//         collide_Y:  { x: packetA.raw_Y.x,    y: packetA.raw_Y.y,    z: packetA.raw_Y.z },
+//         touch_Y:    { x: packetA.touch_Y.x,  y: packetA.touch_Y.y,  z: packetA.touch_Y.z },
+//         collide_Z:  { x: packetA.raw_Z.x,    y: packetA.raw_Z.y,    z: packetA.raw_Z.z },
+//         touch_Z:    { x: packetA.touch_Z.x,  y: packetA.touch_Z.y,  z: packetA.touch_Z.z },
+//         isOuterX: packetA.isOuterX
+//       };
+//       if (packetA.isOuterX && packetA.xSteps) {
+//         base.outerX_step1_stop = { x: packetA.xSteps.step1.x, y: packetA.xSteps.step1.y, z: packetA.xSteps.step1.z };
+//         base.outerX_step2_stop = { x: packetA.xSteps.step2.x, y: packetA.xSteps.step2.y, z: packetA.xSteps.step2.z };
+//       }
+//       return base;
+//     })(),
+//     B: (() => {
+//       const base = {
+//         start:      { x: packetB.start.x,    y: packetB.start.y,    z: packetB.start.z },
+//         collide_X:  { x: packetB.raw_X.x,    y: packetB.raw_X.y,    z: packetB.raw_X.z },
+//         touch_X:    { x: packetB.touch_X.x,  y: packetB.touch_X.y,  z: packetB.touch_X.z },
+//         collide_Y:  { x: packetB.raw_Y.x,    y: packetB.raw_Y.y,    z: packetB.raw_Y.z },
+//         touch_Y:    { x: packetB.touch_Y.x,  y: packetB.touch_Y.y,  z: packetB.touch_Y.z },
+//         collide_Z:  { x: packetB.raw_Z.x,    y: packetB.raw_Z.y,    z: packetB.raw_Z.z },
+//         touch_Z:    { x: packetB.touch_Z.x,  y: packetB.touch_Z.y,  z: packetB.touch_Z.z },
+//         isOuterX: packetB.isOuterX
+//       };
+//       if (packetB.isOuterX && packetB.xSteps) {
+//         base.outerX_step1_stop = { x: packetB.xSteps.step1.x, y: packetB.xSteps.step1.y, z: packetB.xSteps.step1.z };
+//         base.outerX_step2_stop = { x: packetB.xSteps.step2.x, y: packetB.xSteps.step2.y, z: packetB.xSteps.step2.z };
+//       }
+//       return base;
+//     })()
+//   };
+lastResultJSON = {
+  welding_data: {
+    edges: {}, // you asked to always name edge "Mock_edge" inside path_plan entries
+    path_plan: [
+      buildPathPlanEntry(packetA),
+      buildPathPlanEntry(packetB)
+    ]
+  }
 };
-
-
-  computeStatus.textContent = 'Computed. Outer Y uses 2-step (endpoint XZ locked).';
+  computeStatus.textContent = 'Computed. Outer X uses 3-step (YZ locked at endpoint).';
   scene.add(dashedGroup); scene.add(axisMarkersGroup);
 });
 
@@ -746,53 +759,6 @@ btnExport.addEventListener('click', ()=>{
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href = url; a.download = 'weld_points.json'; a.click();
   URL.revokeObjectURL(url);
-});
-
-btnSendToVision.addEventListener('click', async () => {
-  if (!lastResultJSON) {
-    alert('Compute first.');
-    return;
-  }
-  const VISION_SERVER = 'http://192.168.31.58:5002'; // Your vision_mock.py server
-  
-  try {
-    // Transform to the format vision_mock expects
-    const payload = {
-      frame: 'base', // or 'object' if needed
-      data: {
-        cycle_id: `PNC_${Date.now()}`,
-        project_id: 'PNC_MANUAL'
-      },
-      segments: [] // We'll populate this
-    };
-
-    // Convert your touch points to segments format
-    // Example for A endpoint (you'll need to add B and create proper segments)
-    payload.segments.push({
-      start: lastResultJSON.A.start,
-      end: lastResultJSON.A.touch_X,
-      q: [0.02875, -0.90542, 0.02327, -0.42289], // Your quaternion
-      touchsense: true
-    });
-    
-    // Add more segments for Y, Z, and B endpoint...
-
-    const response = await fetch(`${VISION_SERVER}/api/welding_data`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-
-    if (response.ok) {
-      alert('✅ Sent to vision server!');
-      console.log('Response:', await response.json());
-    } else {
-      alert('❌ Failed to send: ' + response.statusText);
-    }
-  } catch (err) {
-    alert('❌ Error: ' + err.message);
-    console.error(err);
-  }
 });
 
 /* ---------- resize + animate ---------- */
