@@ -64,12 +64,21 @@
     <div class="row"><label>Y = X × Z</label><span id="y-info" class="muted"></span></div>
     <hr/>
 
-    <div class="row"><strong>Start A</strong></div>
-    <div class="row">
-      <input id="startA-x" type="number" step="0.001" placeholder="x">
-      <input id="startA-y" type="number" step="0.001" placeholder="y">
-      <input id="startA-z" type="number" step="0.001" placeholder="z">
-      <button id="btn-set-startA" class="ctrl-btn">Set A</button>
+       <div class="row"><strong>Start A</strong></div>
+    <div class="row" style="gap:4px; justify-content:space-between;">
+      <div style="display:flex; flex-direction:column; align-items:left;">
+        <label class="muted">X   (Real World Z)</label>
+        <input id="startA-x" type="number" step="0.001" placeholder="x">
+      </div>
+      <div style="display:flex; flex-direction:column; align-items:left;">
+        <label class="muted">Y   (Real World X)</label>
+        <input id="startA-y" type="number" step="0.001" placeholder="y">
+      </div>
+      <div style="display:flex; flex-direction:column; align-items:left;">
+        <label class="muted">Z   (Real World Y)</label>
+        <input id="startA-z" type="number" step="0.001" placeholder="z">
+      </div>
+      <button id="btn-set-startA" class="ctrl-btn" style="height:48px;">Set A</button>
     </div>
     <div class="row">
       <label><input id="chkA-outer" type="checkbox"> Mark A as <b>Outer</b></label>
@@ -77,16 +86,26 @@
     </div>
 
     <div class="row" style="margin-top:8px;"><strong>Start B</strong></div>
-    <div class="row">
-      <input id="startB-x" type="number" step="0.001" placeholder="x">
-      <input id="startB-y" type="number" step="0.001" placeholder="y">
-      <input id="startB-z" type="number" step="0.001" placeholder="z">
-      <button id="btn-set-startB" class="ctrl-btn">Set B</button>
+    <div class="row" style="gap:4px; justify-content:space-between;">
+      <div style="display:flex; flex-direction:column; align-items:left;">
+        <label class="muted">X   (Real World Z)</label>
+        <input id="startB-x" type="number" step="0.001" placeholder="x">
+      </div>
+      <div style="display:flex; flex-direction:column; align-items:left;">
+        <label class="muted">Y   (Real World X)</label>
+        <input id="startB-y" type="number" step="0.001" placeholder="y">
+      </div>
+      <div style="display:flex; flex-direction:column; align-items:left;">
+        <label class="muted">Z   (Real World Y)</label>
+        <input id="startB-z" type="number" step="0.001" placeholder="z">
+      </div>
+      <button id="btn-set-startB" class="ctrl-btn" style="height:48px;">Set B</button>
     </div>
     <div class="row">
       <label><input id="chkB-outer" type="checkbox"> Mark B as <b>Outer</b></label>
       <span id="startB-info" class="muted">—</span>
     </div>
+
 
     <div class="row" style="margin-top:6px;">
       <span class="muted">Tip: <b>Shift+Click</b> in the viewport to place a global start (in the air).</span>

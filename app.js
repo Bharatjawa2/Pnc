@@ -121,7 +121,7 @@ selZ.addEventListener('change', updateBasisFromUI);
 refreshBasisUI();
 
 /* ---------- small helpers ---------- */
-function v3(v){ return [v.x, v.y, v.z]; } // small helper used by export builder
+function v3(v){ return [v.z, v.x, v.y]; } // small helper used by export builder
 
 /* ---------- utils ---------- */
 function disposeObject(obj){
@@ -663,9 +663,9 @@ function buildPathPlanEntry(pkt, name = "Mock_edge") {
     torch_angle: [],
     touch_order: ['x','z','y'],
     touch_path: {
-      x: { start_point: startCommon, end_point: v3(pkt.touch_X), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
-      y: { start_point: startCommon, end_point: v3(pkt.touch_Y), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
-      z: { start_point: startCommon, end_point: v3(pkt.touch_Z), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd }
+      x: { start_point: startCommon, end_point: v3(pkt.touch_Z), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
+      y: { start_point: startX, end_point: v3(pkt.touch_X), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
+      z: { start_point: startCommon, end_point: v3(pkt.touch_Y), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd }
     }
   };
 }
