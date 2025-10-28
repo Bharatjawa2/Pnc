@@ -78,9 +78,10 @@ const startMarkers = { A: null, B: null };
 const manualOuter = { A: false, B: false };
 
 /* ---------- basis (user) ---------- */
-const currentBasis = { x: new THREE.Vector3(0,1,0), z: new THREE.Vector3(0,0,-1), y: new THREE.Vector3() };
+const currentBasis = { x: new THREE.Vector3(0,0,-1), z: new THREE.Vector3(0,-1,0), y: new THREE.Vector3() };
 selX.value = "-Z"; selZ.value = "-Y";
-currentBasis.y.copy(currentBasis.x).cross(currentBasis.z).normalize();
+currentBasis.y.copy(currentBasis.z).cross(currentBasis.x).normalize();
+refreshBasisUI();
 function fmt(n){ return (Math.round(n*1000)/1000).toFixed(3); }
 
 /* ---------- UI helpers ---------- */
@@ -104,8 +105,8 @@ function updateBasisFromUI(){
   const bz = vecFromSelectValue(selZ.value).clone().normalize();
   if (bx.clone().cross(bz).length() < 1e-6){
     alert('X and Z are colinear — choose different.');
-    selX.value = "+Y"; selZ.value = "-Z";
-    currentBasis.x.set(0,1,0); currentBasis.z.set(0,0,-1);
+    selX.value = "-Z"; selZ.value = "-Y";
+    currentBasis.x.set(0,0,-1); currentBasis.z.set(0,-1,0);
   } else {
     currentBasis.x.copy(bx); currentBasis.z.copy(bz);
   }
