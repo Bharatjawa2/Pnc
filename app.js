@@ -740,7 +740,7 @@ btnSendToVision.addEventListener('click', async () => {
     return;
   }
 
-  const VISION_SERVER = 'http://192.168.0.102:5002'; // adjust if needed
+  const VISION_SERVER = 'http://192.168.38.58:5002'; // adjust if needed
 
   // build payload base
   const payload = {
