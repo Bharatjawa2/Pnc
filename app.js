@@ -753,7 +753,7 @@ btnSendToVision.addEventListener('click', async () => {
     alert('Compute first.');
     return;
   }
-  const VISION_SERVER = 'http://192.168.31.58:5002'; // Your vision_mock.py server
+  const VISION_SERVER = 'http://192.168.0.102:5002'; // Your vision_mock.py server
   
   try {
     // Transform to the format vision_mock expects
@@ -773,7 +773,38 @@ btnSendToVision.addEventListener('click', async () => {
       end: lastResultJSON.A.touch_X,
       q: [0.02875, -0.90542, 0.02327, -0.42289], // Your quaternion
       touchsense: true
-    });
+    },
+    {
+      start: lastResultJSON.A.start,
+      end: lastResultJSON.A.touch_Y,
+      q: [0.02875, -0.90542, 0.02327, -0.42289], // Your quaternion
+      touchsense: true
+    },
+    {
+      start: lastResultJSON.A.start,
+      end: lastResultJSON.A.touch_Z,
+      q: [0.02875, -0.90542, 0.02327, -0.42289], // Your quaternion
+      touchsense: true
+    },
+    {
+      start: lastResultJSON.B.start,
+      end: lastResultJSON.B.touch_X,
+      q: [0.02875, -0.90542, 0.02327, -0.42289], // Your quaternion
+      touchsense: true
+    },
+    {
+      start: lastResultJSON.B.start,
+      end: lastResultJSON.B.touch_Y,
+      q: [0.02875, -0.90542, 0.02327, -0.42289], // Your quaternion
+      touchsense: true
+    },
+    {
+      start: lastResultJSON.B.start,
+      end: lastResultJSON.B.touch_Z,
+      q: [0.02875, -0.90542, 0.02327, -0.42289], // Your quaternion
+      touchsense: true
+    },
+  );
     
     // Add more segments for Y, Z, and B endpoint...
 
