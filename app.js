@@ -740,7 +740,7 @@ btnSendToVision.addEventListener('click', async () => {
     return;
   }
 
-  const VISION_SERVER = 'http://192.168.31.58:5002'; // adjust if needed
+  const VISION_SERVER = 'http://192.168.0.102:5002'; // adjust if needed
 
   // build payload base
   const payload = {
@@ -773,7 +773,7 @@ btnSendToVision.addEventListener('click', async () => {
         const reorderIfV3 = arr => {
           if (!Array.isArray(arr) || arr.length < 3) return arr;
           // v3 produced: [v.z, v.x, v.y] -> convert to real-world [x,y,z] = [arr[1], arr[2], arr[0]]
-          return [arr[0]-400, arr[1], arr[2]];
+          return [arr[0], arr[1], arr[2]];
         };
 
         const startArr = reorderIfV3(tp.start_point);
