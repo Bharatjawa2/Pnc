@@ -13,12 +13,21 @@
     .ctrl-btn.on { background:#3b82f6; color:white; border-color:#2563eb; }
     #file-label { background:#10b981; color:white; padding:8px 12px; border-radius:8px; cursor:pointer; font-weight:700; }
     #file-name { font-size:13px; color:#374151; margin-left:12px; }
-    .panel { position:absolute; left:18px; top:86px; z-index:30; background:white; border:1px solid #e5e7eb; border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,0.06); padding:12px 14px; min-width:320px; }
+    .panel { position:absolute; left:18px; top:86px; z-index:30; background:white; border:1px solid #e5e7eb; border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,0.06); padding:12px 14px; min-width:360px; max-width:640px; }
     .row { display:flex; gap:8px; align-items:center; margin:6px 0; }
     .row label { font-size:13px; color:#374151; }
     .row input[type="number"] { width:92px; padding:6px 8px; border:1px solid #d1d5db; border-radius:8px; }
     .muted { color:#6b7280; font-size:12px; }
     hr { border:none; height:1px; background:#e5e7eb; margin:10px 0; }
+    .start-block { display:flex; gap:8px; align-items:flex-start; }
+    .start-column { display:flex; flex-direction:column; align-items:flex-start; gap:6px; min-width:120px; }
+    .small-btn { padding:6px 8px; font-size:13px; border-radius:8px; }
+    .checkbox-row { display:flex; align-items:center; gap:8px; }
+    details.summary-inline { display:block; font-size:13px; color:#374151; margin-top:6px; cursor:pointer; }
+    .torch-grid { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:6px; }
+    .torch-row { display:flex; gap:6px; align-items:center; }
+    .torch-row input[type="number"] { width:66px; }
+    summary { cursor:pointer; }
   </style>
 
   <script type="importmap">
@@ -64,51 +73,193 @@
     <div class="row"><label>Y = X × Z</label><span id="y-info" class="muted"></span></div>
     <hr/>
 
-       <div class="row"><strong>Start A</strong></div>
-    <div class="row" style="gap:4px; justify-content:space-between;">
-      <div style="display:flex; flex-direction:column; align-items:left;">
-        <label class="muted">X   (Real World Z)</label>
-        <input id="startA-x" type="number" step="0.001" placeholder="x">
-      </div>
-      <div style="display:flex; flex-direction:column; align-items:left;">
-        <label class="muted">Y   (Real World X)</label>
-        <input id="startA-y" type="number" step="0.001" placeholder="y">
-      </div>
-      <div style="display:flex; flex-direction:column; align-items:left;">
-        <label class="muted">Z   (Real World Y)</label>
-        <input id="startA-z" type="number" step="0.001" placeholder="z">
-      </div>
-      <button id="btn-set-startA" class="ctrl-btn" style="height:48px;">Set A</button>
-    </div>
     <div class="row">
-      <label><input id="chkA-outer" type="checkbox"> Mark A as <b>Outer</b></label>
-      <span id="startA-info" class="muted">—</span>
+      <strong>Auto-start</strong>
+      <div style="margin-left:8px;" class="checkbox-row">
+        <label><input id="chk-auto-start" type="checkbox" checked> Enable Auto-start on edge selection</label>
+      </div>
     </div>
 
-    <div class="row" style="margin-top:8px;"><strong>Start B</strong></div>
-    <div class="row" style="gap:4px; justify-content:space-between;">
-      <div style="display:flex; flex-direction:column; align-items:left;">
-        <label class="muted">X   (Real World Z)</label>
-        <input id="startB-x" type="number" step="0.001" placeholder="x">
+    <!-- START A block: three start points for A -->
+    <div class="row"><strong>Start A (Ax, Ay, Az)</strong></div>
+
+    <div class="row start-block">
+      <div class="start-column">
+        <label class="muted">Start A<span style="font-weight:700">ₓ</span> — (used for X)</label>
+        <input id="startAx-x" type="number" step="0.001" placeholder="x">
+        <input id="startAx-y" type="number" step="0.001" placeholder="y">
+        <input id="startAx-z" type="number" step="0.001" placeholder="z">
+        <button id="btn-set-startAx" class="ctrl-btn small-btn">Set Ax</button>
+
+        <details>
+          <summary>Torch (start/end)</summary>
+          <div class="torch-grid">
+            <div class="torch-row"><strong>Start:</strong>
+              <input id="startAx_torch_start_w" type="number" step="0.001" placeholder="w">
+              <input id="startAx_torch_start_x" type="number" step="0.001" placeholder="x">
+              <input id="startAx_torch_start_y" type="number" step="0.001" placeholder="y">
+              <input id="startAx_torch_start_z" type="number" step="0.001" placeholder="z">
+            </div>
+            <div class="torch-row"><strong>End:</strong>
+              <input id="startAx_torch_end_w" type="number" step="0.001" placeholder="w">
+              <input id="startAx_torch_end_x" type="number" step="0.001" placeholder="x">
+              <input id="startAx_torch_end_y" type="number" step="0.001" placeholder="y">
+              <input id="startAx_torch_end_z" type="number" step="0.001" placeholder="z">
+            </div>
+          </div>
+        </details>
       </div>
-      <div style="display:flex; flex-direction:column; align-items:left;">
-        <label class="muted">Y   (Real World X)</label>
-        <input id="startB-y" type="number" step="0.001" placeholder="y">
+
+      <div class="start-column">
+        <label class="muted">Start A<span style="font-weight:700">ᵧ</span> — (used for Y)</label>
+        <input id="startAy-x" type="number" step="0.001" placeholder="x">
+        <input id="startAy-y" type="number" step="0.001" placeholder="y">
+        <input id="startAy-z" type="number" step="0.001" placeholder="z">
+        <button id="btn-set-startAy" class="ctrl-btn small-btn">Set Ay</button>
+
+        <details>
+          <summary>Torch (start/end)</summary>
+          <div class="torch-grid">
+            <div class="torch-row"><strong>Start:</strong>
+              <input id="startAy_torch_start_w" type="number" step="0.001" placeholder="w">
+              <input id="startAy_torch_start_x" type="number" step="0.001" placeholder="x">
+              <input id="startAy_torch_start_y" type="number" step="0.001" placeholder="y">
+              <input id="startAy_torch_start_z" type="number" step="0.001" placeholder="z">
+            </div>
+            <div class="torch-row"><strong>End:</strong>
+              <input id="startAy_torch_end_w" type="number" step="0.001" placeholder="w">
+              <input id="startAy_torch_end_x" type="number" step="0.001" placeholder="x">
+              <input id="startAy_torch_end_y" type="number" step="0.001" placeholder="y">
+              <input id="startAy_torch_end_z" type="number" step="0.001" placeholder="z">
+            </div>
+          </div>
+        </details>
       </div>
-      <div style="display:flex; flex-direction:column; align-items:left;">
-        <label class="muted">Z   (Real World Y)</label>
-        <input id="startB-z" type="number" step="0.001" placeholder="z">
+
+      <div class="start-column">
+        <label class="muted">Start A<span style="font-weight:700">𝓏</span> — (used for Z)</label>
+        <input id="startAz-x" type="number" step="0.001" placeholder="x">
+        <input id="startAz-y" type="number" step="0.001" placeholder="y">
+        <input id="startAz-z" type="number" step="0.001" placeholder="z">
+        <button id="btn-set-startAz" class="ctrl-btn small-btn">Set Az</button>
+
+        <details>
+          <summary>Torch (start/end)</summary>
+          <div class="torch-grid">
+            <div class="torch-row"><strong>Start:</strong>
+              <input id="startAz_torch_start_w" type="number" step="0.001" placeholder="w">
+              <input id="startAz_torch_start_x" type="number" step="0.001" placeholder="x">
+              <input id="startAz_torch_start_y" type="number" step="0.001" placeholder="y">
+              <input id="startAz_torch_start_z" type="number" step="0.001" placeholder="z">
+            </div>
+            <div class="torch-row"><strong>End:</strong>
+              <input id="startAz_torch_end_w" type="number" step="0.001" placeholder="w">
+              <input id="startAz_torch_end_x" type="number" step="0.001" placeholder="x">
+              <input id="startAz_torch_end_y" type="number" step="0.001" placeholder="y">
+              <input id="startAz_torch_end_z" type="number" step="0.001" placeholder="z">
+            </div>
+          </div>
+        </details>
       </div>
-      <button id="btn-set-startB" class="ctrl-btn" style="height:48px;">Set B</button>
-    </div>
-    <div class="row">
-      <label><input id="chkB-outer" type="checkbox"> Mark B as <b>Outer</b></label>
-      <span id="startB-info" class="muted">—</span>
+
+      <div style="display:flex; flex-direction:column; gap:8px; margin-left:8px;">
+        <label><input id="chkA-outer" type="checkbox"> Mark A as <b>Outer-X</b></label>
+        <span id="startA-info" class="muted">—</span>
+      </div>
     </div>
 
+    <hr/>
+
+    <!-- START B block -->
+    <div class="row"><strong>Start B (Bx, By, Bz)</strong></div>
+
+    <div class="row start-block">
+      <div class="start-column">
+        <label class="muted">Start B<span style="font-weight:700">ₓ</span> — (used for X)</label>
+        <input id="startBx-x" type="number" step="0.001" placeholder="x">
+        <input id="startBx-y" type="number" step="0.001" placeholder="y">
+        <input id="startBx-z" type="number" step="0.001" placeholder="z">
+        <button id="btn-set-startBx" class="ctrl-btn small-btn">Set Bx</button>
+
+        <details>
+          <summary>Torch (start/end)</summary>
+          <div class="torch-grid">
+            <div class="torch-row"><strong>Start:</strong>
+              <input id="startBx_torch_start_w" type="number" step="0.001" placeholder="w">
+              <input id="startBx_torch_start_x" type="number" step="0.001" placeholder="x">
+              <input id="startBx_torch_start_y" type="number" step="0.001" placeholder="y">
+              <input id="startBx_torch_start_z" type="number" step="0.001" placeholder="z">
+            </div>
+            <div class="torch-row"><strong>End:</strong>
+              <input id="startBx_torch_end_w" type="number" step="0.001" placeholder="w">
+              <input id="startBx_torch_end_x" type="number" step="0.001" placeholder="x">
+              <input id="startBx_torch_end_y" type="number" step="0.001" placeholder="y">
+              <input id="startBx_torch_end_z" type="number" step="0.001" placeholder="z">
+            </div>
+          </div>
+        </details>
+      </div>
+
+      <div class="start-column">
+        <label class="muted">Start B<span style="font-weight:700">ᵧ</span> — (used for Y)</label>
+        <input id="startBy-x" type="number" step="0.001" placeholder="x">
+        <input id="startBy-y" type="number" step="0.001" placeholder="y">
+        <input id="startBy-z" type="number" step="0.001" placeholder="z">
+        <button id="btn-set-startBy" class="ctrl-btn small-btn">Set By</button>
+
+        <details>
+          <summary>Torch (start/end)</summary>
+          <div class="torch-grid">
+            <div class="torch-row"><strong>Start:</strong>
+              <input id="startBy_torch_start_w" type="number" step="0.001" placeholder="w">
+              <input id="startBy_torch_start_x" type="number" step="0.001" placeholder="x">
+              <input id="startBy_torch_start_y" type="number" step="0.001" placeholder="y">
+              <input id="startBy_torch_start_z" type="number" step="0.001" placeholder="z">
+            </div>
+            <div class="torch-row"><strong>End:</strong>
+              <input id="startBy_torch_end_w" type="number" step="0.001" placeholder="w">
+              <input id="startBy_torch_end_x" type="number" step="0.001" placeholder="x">
+              <input id="startBy_torch_end_y" type="number" step="0.001" placeholder="y">
+              <input id="startBy_torch_end_z" type="number" step="0.001" placeholder="z">
+            </div>
+          </div>
+        </details>
+      </div>
+
+      <div class="start-column">
+        <label class="muted">Start B<span style="font-weight:700">𝓏</span> — (used for Z)</label>
+        <input id="startBz-x" type="number" step="0.001" placeholder="x">
+        <input id="startBz-y" type="number" step="0.001" placeholder="y">
+        <input id="startBz-z" type="number" step="0.001" placeholder="z">
+        <button id="btn-set-startBz" class="ctrl-btn small-btn">Set Bz</button>
+
+        <details>
+          <summary>Torch (start/end)</summary>
+          <div class="torch-grid">
+            <div class="torch-row"><strong>Start:</strong>
+              <input id="startBz_torch_start_w" type="number" step="0.001" placeholder="w">
+              <input id="startBz_torch_start_x" type="number" step="0.001" placeholder="x">
+              <input id="startBz_torch_start_y" type="number" step="0.001" placeholder="y">
+              <input id="startBz_torch_start_z" type="number" step="0.001" placeholder="z">
+            </div>
+            <div class="torch-row"><strong>End:</strong>
+              <input id="startBz_torch_end_w" type="number" step="0.001" placeholder="w">
+              <input id="startBz_torch_end_x" type="number" step="0.001" placeholder="x">
+              <input id="startBz_torch_end_y" type="number" step="0.001" placeholder="y">
+              <input id="startBz_torch_end_z" type="number" step="0.001" placeholder="z">
+            </div>
+          </div>
+        </details>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:8px; margin-left:8px;">
+        <label><input id="chkB-outer" type="checkbox"> Mark B as <b>Outer-X</b></label>
+        <span id="startB-info" class="muted">—</span>
+      </div>
+    </div>
 
     <div class="row" style="margin-top:6px;">
-      <span class="muted">Tip: <b>Shift+Click</b> in the viewport to place a global start (in the air).</span>
+      <span class="muted">Tip: <b>Shift+Click</b> in the viewport to place a global start (in the air). Global start will be used for any axis that lacks a start.</span>
     </div>
     <div class="row"><span id="start-global-info" class="muted">—</span></div>
     <hr/>

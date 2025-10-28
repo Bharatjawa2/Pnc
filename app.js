@@ -20,22 +20,44 @@ const zInfo = document.getElementById('z-info');
 const computeStatus = document.getElementById('compute-status');
 
 const startAInfo = document.getElementById('startA-info');
-const btnSetStartA = document.getElementById('btn-set-startA');
 const chkAOuter = document.getElementById('chkA-outer');
 
 const startBInfo = document.getElementById('startB-info');
-const btnSetStartB = document.getElementById('btn-set-startB');
 const chkBOuter = document.getElementById('chkB-outer');
 
-const startAx = document.getElementById('startA-x');
-const startAy = document.getElementById('startA-y');
-const startAz = document.getElementById('startA-z');
-
-const startBx = document.getElementById('startB-x');
-const startBy = document.getElementById('startB-y');
-const startBz = document.getElementById('startB-z');
-
 const startGlobalInfo = document.getElementById('start-global-info');
+const chkAutoStart = document.getElementById('chk-auto-start');
+
+/* ---------- start inputs (Ax,Ay,Az, Bx,By,Bz) ---------- */
+const startAx_x = document.getElementById('startAx-x');
+const startAx_y = document.getElementById('startAx-y');
+const startAx_z = document.getElementById('startAx-z');
+const btnSetStartAx = document.getElementById('btn-set-startAx');
+
+const startAy_x = document.getElementById('startAy-x');
+const startAy_y = document.getElementById('startAy-y');
+const startAy_z = document.getElementById('startAy-z');
+const btnSetStartAy = document.getElementById('btn-set-startAy');
+
+const startAz_x = document.getElementById('startAz-x');
+const startAz_y = document.getElementById('startAz-y');
+const startAz_z = document.getElementById('startAz-z');
+const btnSetStartAz = document.getElementById('btn-set-startAz');
+
+const startBx_x = document.getElementById('startBx-x');
+const startBx_y = document.getElementById('startBx-y');
+const startBx_z = document.getElementById('startBx-z');
+const btnSetStartBx = document.getElementById('btn-set-startBx');
+
+const startBy_x = document.getElementById('startBy-x');
+const startBy_y = document.getElementById('startBy-y');
+const startBy_z = document.getElementById('startBy-z');
+const btnSetStartBy = document.getElementById('btn-set-startBy');
+
+const startBz_x = document.getElementById('startBz-x');
+const startBz_y = document.getElementById('startBz-y');
+const startBz_z = document.getElementById('startBz-z');
+const btnSetStartBz = document.getElementById('btn-set-startBz');
 
 /* ---------- three.js ---------- */
 const scene = new THREE.Scene();
@@ -72,8 +94,9 @@ let globalStartPoint = null;   // Shift+click start (in air)
 let globalStartMarker = null;
 
 // per-endpoint starts + markers + manual outer flags
-const starts = { A: null, B: null };
-const startMarkers = { A: null, B: null };
+// starts.A = { x:Vector3|null, y:Vector3|null, z:Vector3|null }
+const starts = { A: {x:null,y:null,z:null}, B: {x:null,y:null,z:null} };
+const startMarkers = { A: {x:null,y:null,z:null}, B: {x:null,y:null,z:null} };
 const manualOuter = { A: false, B: false };
 
 /* ---------- basis (user) ---------- */
@@ -154,15 +177,19 @@ function clearAll(){
   fileNameLabel.textContent='No file loaded';
   if(globalStartMarker){ scene.remove(globalStartMarker); disposeObject(globalStartMarker); globalStartMarker=null; globalStartPoint=null; }
   startGlobalInfo.textContent='—';
+  // clear the six start inputs and markers
   ['A','B'].forEach(k=>{
-    if(startMarkers[k]){ scene.remove(startMarkers[k]); disposeObject(startMarkers[k]); startMarkers[k]=null; }
-    starts[k]=null; manualOuter[k]=false;
-    document.getElementById(`start${k}-x`).value = '';
-    document.getElementById(`start${k}-y`).value = '';
-    document.getElementById(`start${k}-z`).value = '';
+    ['x','y','z'].forEach(a=>{
+      if(startMarkers[k][a]){ scene.remove(startMarkers[k][a]); disposeObject(startMarkers[k][a]); startMarkers[k][a]=null; }
+      starts[k][a]=null;
+    });
+    manualOuter[k]=false;
     document.getElementById(`start${k}-info`).textContent='—';
     document.getElementById(`chk${k}-outer`).checked = false;
   });
+  // clear input fields (best-effort)
+  const inputs = document.querySelectorAll('input[type="number"]');
+  inputs.forEach(i=>i.value='');
 }
 
 /* ---------- geometry helpers ---------- */
@@ -225,11 +252,7 @@ function computeAxisSearchFrom(origin, axisDir, targets, sceneBox, diag, INF){
   return { rawCollision: raw, search_point, dir: chosen.dir.clone(), buffer: buf };
 }
 
-/* ---------- X (outer) three-step ----------
-   STEP 1: outward in X (YZ locked to endpoint)
-   STEP 2: move along ±Z only, +20 mm past wall in same direction
-   STEP 3: from step2 cast along ±X targeting endpoint’s X
-------------------------------------------- */
+/* ---------- X (outer) three-step (unchanged logic) ---------- */
 function computeXOuterThreeStep(
   startOrigin,
   endpointPos,
@@ -316,49 +339,170 @@ function computeXOuterThreeStep(
   return { step1, step2, rawCollision, search_point };
 }
 
-/* ---------- packet computation ---------- */
-function computePacketForEndpoint(startOrigin, endpointPos, targets, basis, flags){
-  const sceneBox = computeCombinedBox(targets);
-  const INF = 5000;
-  const diag = sceneBox ? sceneBox.getSize(new THREE.Vector3()).length() : INF;
+/* ---------- Auto-start: analyze local faces and geometry ---------- */
 
-  // Z is always single-step from start
-  const pz = computeAxisSearchFrom(startOrigin, basis.z, targets, sceneBox, diag, INF);
-
-  // X: single-step, unless we force Outer-X 3-step
-  let px, xStepsInfo=null, isOuterX=false;
-  if (flags.forceOuter) {
-    isOuterX = true;
-    const x3 = computeXOuterThreeStep(
-      startOrigin,
-      endpointPos,
-      basis,
-      targets,
-      sceneBox,
-      diag,
-      INF,
-      pz.rawCollision.clone() // use same-start Z raw as a hint
-    );
-    px = { rawCollision: x3.rawCollision, search_point: x3.search_point };
-    xStepsInfo = { step1: x3.step1, step2: x3.step2 };
-  } else {
-    px = computeAxisSearchFrom(startOrigin, basis.x, targets, sceneBox, diag, INF);
+function gatherLocalFacesAndNormal(point, targets){
+  // returns { normal: Vector3, faces: [ {a,b,c,normal,area}... ] }
+  const faces = [];
+  const q = point;
+  const tmpV = new THREE.Vector3();
+  for(const mesh of targets){
+    const geom = mesh.geometry;
+    if(!geom) continue;
+    const pos = geom.getAttribute('position');
+    const idx = geom.index;
+    if(!pos) continue;
+    if(idx){
+      for(let i=0;i<idx.count;i+=3){
+        const ia = idx.getX(i), ib = idx.getX(i+1), ic = idx.getX(i+2);
+        const a = new THREE.Vector3().fromBufferAttribute(pos, ia);
+        const b = new THREE.Vector3().fromBufferAttribute(pos, ib);
+        const c = new THREE.Vector3().fromBufferAttribute(pos, ic);
+        // compare distances to see if this tri contains the point (within tolerance)
+        const dA = a.distanceToSquared(q), dB = b.distanceToSquared(q), dC = c.distanceToSquared(q);
+        const tol = 1e-6;
+        if(dA < 1e-8 || dB < 1e-8 || dC < 1e-8){
+          const e1 = b.clone().sub(a);
+          const e2 = c.clone().sub(a);
+          const n = e1.clone().cross(e2);
+          const area = n.length() * 0.5;
+          if(n.lengthSq() > 1e-12){
+            const nrm = n.clone().normalize();
+            faces.push({ a,b,c,normal:nrm,area });
+          }
+        }
+      }
+    } else {
+      // no index - assume triangles in order
+      for(let i=0;i<pos.count;i+=3){
+        const a = new THREE.Vector3().fromBufferAttribute(pos, i);
+        const b = new THREE.Vector3().fromBufferAttribute(pos, i+1);
+        const c = new THREE.Vector3().fromBufferAttribute(pos, i+2);
+        const dA = a.distanceToSquared(q), dB = b.distanceToSquared(q), dC = c.distanceToSquared(q);
+        if(dA < 1e-8 || dB < 1e-8 || dC < 1e-8){
+          const e1 = b.clone().sub(a), e2 = c.clone().sub(a);
+          const n = e1.clone().cross(e2);
+          const area = n.length() * 0.5;
+          if(n.lengthSq() > 1e-12){
+            const nrm = n.clone().normalize();
+            faces.push({ a,b,c,normal:nrm,area });
+          }
+        }
+      }
+    }
   }
-
-  // Y stays single-step
-  const py = computeAxisSearchFrom(startOrigin, basis.y, targets, sceneBox, diag, INF);
-
-  return {
-    start: startOrigin.clone(),
-    touch_X: px.search_point.clone(), raw_X: px.rawCollision.clone(),
-    touch_Y: py.search_point.clone(), raw_Y: py.rawCollision.clone(),
-    touch_Z: pz.search_point.clone(), raw_Z: pz.rawCollision.clone(),
-    isOuterX,
-    xSteps: xStepsInfo
-  };
+  // compute weighted average normal
+  if(faces.length === 0) return null;
+  const avg = new THREE.Vector3(0,0,0);
+  let totalArea = 0;
+  for(const f of faces){
+    avg.add(f.normal.clone().multiplyScalar(Math.max(f.area, 1e-6)));
+    totalArea += Math.max(f.area, 1e-6);
+  }
+  if(totalArea <= 0) return null;
+  avg.divideScalar(totalArea).normalize();
+  return { normal: avg, faces };
 }
 
-/* ---------- visuals ---------- */
+function rayDistanceFrom(point, dir, maxDist, targets){
+  // returns distance to first hit, or Infinity if no hit within maxDist
+  const origin = point.clone();
+  raycaster.set(origin, dir.clone().normalize());
+  let hits=[]; for(const m of targets) hits = hits.concat(raycaster.intersectObject(m, true));
+  hits = hits.filter(h=>h.distance>1e-6);
+  if(hits.length === 0) return Infinity;
+  const d = hits[0].distance;
+  return d <= maxDist ? d : Infinity;
+}
+
+function nudgeOutOfCollision(s, outwardDir, targets, safeOffset=1.5, maxTries=10){
+  // if s is too close to geometry or line-of-sight to p is blocked, push along outwardDir until it's clear
+  for(let i=0;i<maxTries;i++){
+    // cast small ray from s along outwardDir to ensure free space in that direction
+    const d = rayDistanceFrom(s.clone().add(outwardDir.clone().multiplyScalar(1e-3)), outwardDir, safeOffset, targets);
+    if(d === Infinity) return s; // clear outward
+    s = s.clone().add(outwardDir.clone().multiplyScalar(safeOffset));
+  }
+  return s;
+}
+
+function computeAutoStartsForVertex(endpointPos, whichEndpointIndex){
+  // whichEndpointIndex used to pick jitter sign (0 for A, 1 for B)
+  const sceneBox = computeCombinedBox(pickMeshes);
+  const diag = sceneBox ? sceneBox.getSize(new THREE.Vector3()).length() : 1000;
+  const INF = 5000;
+
+  // buffer constants (scaled with scene size)
+  const BUF_MAIN = Math.max(diag * 0.06, 5);
+  const BUF_STEP = Math.max(diag * 0.03, 3);
+  const BUF_SMALL = Math.max(2.0, diag * 0.01);
+  const JITTER = Math.max(0.5, diag * 0.01);
+  const SAFE_OFFSET = Math.max(1.5, diag * 0.002);
+  const RAY_TEST_DIST = Math.max(diag * 0.4, 50);
+
+  // gather local normal from faces
+  let local = gatherLocalFacesAndNormal(endpointPos, pickMeshes);
+  let N_local = local && local.normal ? local.normal.clone() : currentBasis.z.clone().normalize();
+
+  // candidate directions to test (face normal and basis axes both signs)
+  const candidates = [];
+  const Zdir = currentBasis.z.clone().normalize();
+  const Xdir = currentBasis.x.clone().normalize();
+  const Ydir = currentBasis.y.clone().normalize();
+  candidates.push(N_local.clone(), N_local.clone().negate());
+  candidates.push(Zdir.clone(), Zdir.clone().negate());
+  candidates.push(Xdir.clone(), Xdir.clone().negate());
+  candidates.push(Ydir.clone(), Ydir.clone().negate());
+
+  // evaluate each candidate by raycast free distance
+  const candidateScores = [];
+  for(const d of candidates){
+    const startOff = endpointPos.clone().add(d.clone().multiplyScalar(1e-3));
+    const dist = rayDistanceFrom(startOff, d, RAY_TEST_DIST, pickMeshes);
+    candidateScores.push({ dir: d.clone(), dist });
+  }
+  // sort by descending distance (prefer free space)
+  candidateScores.sort((a,b)=> (b.dist === Infinity ? 1e9 : b.dist) - (a.dist===Infinity ? 1e9 : a.dist));
+
+  // primary outward direction
+  const D_out = candidateScores.length ? candidateScores[0].dir.clone() : Zdir.clone();
+  // secondary choose next that is not too aligned with D_out
+  let D_side = candidateScores.find(c=> Math.abs(c.dir.dot(D_out)) < 0.9 )?.dir || (Math.abs(Ydir.dot(D_out))<0.9 ? Ydir.clone() : Xdir.clone());
+
+  // Build starts following the requested flow:
+  // 1) startX: towards the face-normal (approach), use -N_local * BUF_MAIN
+  // Add jitter perpendicular to separate A/B
+  const perp = new THREE.Vector3().crossVectors(D_out, N_local).length() < 1e-6 ? new THREE.Vector3().crossVectors(Xdir, Zdir) : new THREE.Vector3().crossVectors(D_out, N_local);
+  perp.normalize();
+  const jitterSign = whichEndpointIndex ? 1 : -1;
+  const sX_base = endpointPos.clone().add(N_local.clone().multiplyScalar(-BUF_MAIN));
+  let sX = sX_base.clone().add(perp.clone().multiplyScalar(JITTER * jitterSign));
+
+  // 2) startZ: from sX move away along N_local a bit (BUF_STEP), plus small outward along D_out
+  let sZ = sX.clone().add(N_local.clone().multiplyScalar(BUF_STEP));
+  sZ.add(D_out.clone().multiplyScalar(BUF_SMALL * 0.5));
+
+  // 3) startY: from sZ move up (Zdir) and along Ydir slightly
+  let sY = sZ.clone().add(Zdir.clone().multiplyScalar(BUF_SMALL)).add(Ydir.clone().multiplyScalar(BUF_SMALL));
+  // add another small jitter orthogonal to separate Y from others
+  const perp2 = new THREE.Vector3().crossVectors(Ydir, D_out).normalize();
+  sY.add(perp2.clone().multiplyScalar(JITTER * (jitterSign * 0.5)));
+
+  // Validate & adjust starts so they are in free space (nudge out along outward)
+  sX = nudgeOutOfCollision(sX, D_out, pickMeshes, SAFE_OFFSET, 8);
+  sZ = nudgeOutOfCollision(sZ, D_out, pickMeshes, SAFE_OFFSET, 8);
+  sY = nudgeOutOfCollision(sY, D_out, pickMeshes, SAFE_OFFSET, 8);
+
+  // Ensure minimum separation between starts
+  const minSep = Math.max(JITTER * 0.8, 1.0);
+  if(sX.distanceTo(sZ) < minSep) sZ.add(perp2.clone().multiplyScalar(minSep));
+  if(sX.distanceTo(sY) < minSep) sY.add(perp.clone().multiplyScalar(minSep));
+  if(sY.distanceTo(sZ) < minSep) sZ.add(perp.clone().multiplyScalar(minSep * -1));
+
+  return { x: sX, y: sY, z: sZ };
+}
+
+/* ---------- visuals & packet builder are updated to use per-axis starts ---------- */
 function createTextSprite(text, fontSize=140, fill='white'){
   const canvas = document.createElement('canvas'); const s=256; canvas.width=s; canvas.height=s;
   const ctx = canvas.getContext('2d'); ctx.clearRect(0,0,s,s);
@@ -374,6 +518,7 @@ function drawLeg(a,b,color){
   const l = new THREE.Line(g, new THREE.LineBasicMaterial({ color, transparent:true, opacity:1 }));
   axisMarkersGroup.add(l);
 }
+
 function showPacket(name, pkt){
   if(!axisMarkersGroup) axisMarkersGroup = new THREE.Group();
   if(!dashedGroup) dashedGroup = new THREE.Group();
@@ -382,22 +527,30 @@ function showPacket(name, pkt){
   const baseColorsOuterX = { X:0xff2e00, Y:0x00a65a, Z:0x00d0ff };
   const colors = pkt.isOuterX ? baseColorsOuterX : baseColorsInner;
 
-  // start marker
-  const startColor = pkt.isOuterX ? 0xb91c1c : 0x2563eb;
-  const s = new THREE.Mesh(new THREE.SphereGeometry(0.058,14,12), new THREE.MeshBasicMaterial({ color:startColor }));
-  s.position.copy(pkt.start); axisMarkersGroup.add(s);
+  // draw start markers for each axis (small)
+  const sSmall = new THREE.Mesh(new THREE.SphereGeometry(0.04,10,8), new THREE.MeshBasicMaterial({ color:0x999999 }));
+  const sx = sSmall.clone(); sx.position.copy(pkt.start_X); axisMarkersGroup.add(sx);
+  const sy = sSmall.clone(); sy.position.copy(pkt.start_Y); axisMarkersGroup.add(sy);
+  const sz = new THREE.Mesh(new THREE.SphereGeometry(0.055,12,10), new THREE.MeshBasicMaterial({ color:pkt.isOuterX ? 0xb91c1c : 0x2563eb }));
+  sz.position.copy(pkt.start_Z); axisMarkersGroup.add(sz);
+
+  // label the start-Z as "start"
+  const sLabel = createTextSprite(`startZ: (${fmt(pkt.start_Z.x)}, ${fmt(pkt.start_Z.y)}, ${fmt(pkt.start_Z.z)})`, 72, 'white');
+  sLabel.position.copy(pkt.start_Z).add(new THREE.Vector3(0,0.06,0)); sLabel.scale.setScalar(0.33);
+  axisMarkersGroup.add(sLabel); selectedLabels.push(sLabel);
 
   // helper for normal axis drawing (dashed to touch, red to raw, markers + label)
   const drawAxis = (axisKey, color) => {
     const touch = pkt[`touch_${axisKey}`], raw = pkt[`raw_${axisKey}`];
 
-    // dashed start → touch
-    const geom = new THREE.BufferGeometry().setFromPoints([ pkt.start.clone(), touch.clone() ]);
+    // dashed start → touch (use axis's own start when reasonable)
+    const origin = axisKey === 'X' ? pkt.start_X : (axisKey === 'Y' ? pkt.start_Y : pkt.start_Z);
+    const geom = new THREE.BufferGeometry().setFromPoints([ origin.clone(), touch.clone() ]);
     const mat  = new THREE.LineDashedMaterial({ color:0x666666, dashSize:0.12, gapSize:0.22 });
     const dashed = new THREE.Line(geom, mat); dashed.computeLineDistances(); dashedGroup.add(dashed);
 
     // solid red start → raw
-    const g2 = new THREE.BufferGeometry().setFromPoints([ pkt.start.clone(), raw.clone() ]);
+    const g2 = new THREE.BufferGeometry().setFromPoints([ origin.clone(), raw.clone() ]);
     const l2 = new THREE.Line(g2, new THREE.LineBasicMaterial({ color:0xff0000 })); axisMarkersGroup.add(l2);
 
     // collide and search markers
@@ -409,7 +562,7 @@ function showPacket(name, pkt){
 
     // label
     const label = createTextSprite(`${name}:${axisKey} → (${fmt(touch.x)}, ${fmt(touch.y)}, ${fmt(touch.z)})`, 84, 'white');
-    label.position.copy(pkt.start.clone().add(touch).multiplyScalar(0.5)).add(new THREE.Vector3(0,0.05,0)); 
+    label.position.copy(origin.clone().add(touch).multiplyScalar(0.5)).add(new THREE.Vector3(0,0.05,0)); 
     label.scale.setScalar(0.42);
     axisMarkersGroup.add(label); selectedLabels.push(label);
   };
@@ -424,8 +577,8 @@ function showPacket(name, pkt){
   } else {
     const c1 = 0xffd34d, c2 = 0xff7b00, c3 = 0x7c3aed; // Step1, Step2, Step3
     if (pkt.xSteps) {
-      // Step1: start → step1 (outward X with YZ locked)
-      const g1 = new THREE.BufferGeometry().setFromPoints([ pkt.start.clone(), pkt.xSteps.step1.clone() ]);
+      // Step1: startX → step1 (outward X with YZ locked)
+      const g1 = new THREE.BufferGeometry().setFromPoints([ pkt.start_X.clone(), pkt.xSteps.step1.clone() ]);
       axisMarkersGroup.add(new THREE.Line(g1, new THREE.LineBasicMaterial({ color:c1 })));
 
       // Step2: step1 → step2 (pure Z)
@@ -583,32 +736,93 @@ renderer.domElement.addEventListener('click', ev=>{
     coords.scale.setScalar(0.45); scene.add(coords); selectedLabels.push(coords);
   });
 
-  computeStatus.textContent = 'Edge selected. Set Start A/B (or use global).';
+  computeStatus.textContent = 'Edge selected. Set Start Ax/Ay/Az and Bx/By/Bz (or use global).';
+
+  // Auto-start: compute per-axis starts for each endpoint if enabled
+  if(chkAutoStart.checked){
+    try{
+      // compute for A (index 0) and B (index 1)
+      if(vA){
+        const autosA = computeAutoStartsForVertex(vA.position.clone(), 0);
+        // populate inputs and markers if not overridden by manual
+        startAx_x.value = fmt(autosA.x.x); startAx_y.value = fmt(autosA.x.y); startAx_z.value = fmt(autosA.x.z);
+        startAy_x.value = fmt(autosA.y.x); startAy_y.value = fmt(autosA.y.y); startAy_z.value = fmt(autosA.y.z);
+        startAz_x.value = fmt(autosA.z.x); startAz_y.value = fmt(autosA.z.y); startAz_z.value = fmt(autosA.z.z);
+        // set in-memory starts and markers (but manual Set still allowed)
+        starts.A.x = autosA.x; starts.A.y = autosA.y; starts.A.z = autosA.z;
+        // create markers (replace existing)
+        ['x','y','z'].forEach(k=>{ if(startMarkers.A[k]){ scene.remove(startMarkers.A[k]); disposeObject(startMarkers.A[k]); startMarkers.A[k]=null; }});
+        startMarkers.A.x = new THREE.Mesh(new THREE.SphereGeometry(0.04,10,8), new THREE.MeshBasicMaterial({ color:0xaaaaaa })); startMarkers.A.x.position.copy(autosA.x); scene.add(startMarkers.A.x);
+        startMarkers.A.y = new THREE.Mesh(new THREE.SphereGeometry(0.04,10,8), new THREE.MeshBasicMaterial({ color:0xaaaaaa })); startMarkers.A.y.position.copy(autosA.y); scene.add(startMarkers.A.y);
+        startMarkers.A.z = new THREE.Mesh(new THREE.SphereGeometry(0.055,12,10), new THREE.MeshBasicMaterial({ color: manualOuter.A ? 0xb91c1c : 0x2563eb })); startMarkers.A.z.position.copy(autosA.z); scene.add(startMarkers.A.z);
+        startAInfo.textContent = `Auto: (${fmt(autosA.z.x)}, ${fmt(autosA.z.y)}, ${fmt(autosA.z.z)})`;
+      }
+
+      if(vB){
+        const autosB = computeAutoStartsForVertex(vB.position.clone(), 1);
+        startBx_x.value = fmt(autosB.x.x); startBx_y.value = fmt(autosB.x.y); startBx_z.value = fmt(autosB.x.z);
+        startBy_x.value = fmt(autosB.y.x); startBy_y.value = fmt(autosB.y.y); startBy_z.value = fmt(autosB.y.z);
+        startBz_x.value = fmt(autosB.z.x); startBz_y.value = fmt(autosB.z.y); startBz_z.value = fmt(autosB.z.z);
+        starts.B.x = autosB.x; starts.B.y = autosB.y; starts.B.z = autosB.z;
+        ['x','y','z'].forEach(k=>{ if(startMarkers.B[k]){ scene.remove(startMarkers.B[k]); disposeObject(startMarkers.B[k]); startMarkers.B[k]=null; }});
+        startMarkers.B.x = new THREE.Mesh(new THREE.SphereGeometry(0.04,10,8), new THREE.MeshBasicMaterial({ color:0xaaaaaa })); startMarkers.B.x.position.copy(autosB.x); scene.add(startMarkers.B.x);
+        startMarkers.B.y = new THREE.Mesh(new THREE.SphereGeometry(0.04,10,8), new THREE.MeshBasicMaterial({ color:0xaaaaaa })); startMarkers.B.y.position.copy(autosB.y); scene.add(startMarkers.B.y);
+        startMarkers.B.z = new THREE.Mesh(new THREE.SphereGeometry(0.055,12,10), new THREE.MeshBasicMaterial({ color: manualOuter.B ? 0xb91c1c : 0x2563eb })); startMarkers.B.z.position.copy(autosB.z); scene.add(startMarkers.B.z);
+        startBInfo.textContent = `Auto: (${fmt(autosB.z.x)}, ${fmt(autosB.z.y)}, ${fmt(autosB.z.z)})`;
+      }
+    }catch(err){
+      console.warn('Auto-start failed:', err);
+    }
+  }
 });
 
-/* ---------- Set start by coordinate (A/B) ---------- */
-function setStartFromInputs(which){
-  const xs = document.getElementById(`start${which}-x`).value;
-  const ys = document.getElementById(`start${which}-y`).value;
-  const zs = document.getElementById(`start${which}-z`).value;
+/* ---------- Set start by coordinate (per-axis) ---------- */
+function readTriple(prefix){
+  const xs = document.getElementById(`${prefix}-x`).value;
+  const ys = document.getElementById(`${prefix}-y`).value;
+  const zs = document.getElementById(`${prefix}-z`).value;
   const x = parseFloat(xs), y = parseFloat(ys), z = parseFloat(zs);
-  if(!isFinite(x) || !isFinite(y) || !isFinite(z)){
-    alert(`Start ${which}: please enter valid numbers`);
+  if(!isFinite(x) || !isFinite(y) || !isFinite(z)) return null;
+  return new THREE.Vector3(x,y,z);
+}
+function setStartAxis(whichEndpoint, axisKey, inputPrefix, infoId){
+  const vec = readTriple(inputPrefix);
+  if(!vec){
+    alert(`Start ${whichEndpoint}${axisKey.toUpperCase()}: please enter valid numbers`);
     return;
   }
-  const p = new THREE.Vector3(x,y,z);
-  starts[which] = p;
-  manualOuter[which] = document.getElementById(`chk${which}-outer`).checked; // now means "Outer-X"
-  if(startMarkers[which]){ scene.remove(startMarkers[which]); disposeObject(startMarkers[which]); }
-  const col = manualOuter[which] ? 0xb91c1c : 0x2563eb; // outer=red-ish, inner=blue-ish
-  startMarkers[which] = new THREE.Mesh(new THREE.SphereGeometry(0.055,12,10), new THREE.MeshBasicMaterial({ color: col }));
-  startMarkers[which].position.copy(p); scene.add(startMarkers[which]);
-  document.getElementById(`start${which}-info`).textContent = `(${fmt(x)}, ${fmt(y)}, ${fmt(z)}) ${manualOuter[which] ? '· OUTER-X' : '· INNER'}`;
+  starts[whichEndpoint][axisKey] = vec;
+  // update marker
+  if(startMarkers[whichEndpoint][axisKey]){ scene.remove(startMarkers[whichEndpoint][axisKey]); disposeObject(startMarkers[whichEndpoint][axisKey]); }
+  const col = (axisKey === 'z') ? (manualOuter[whichEndpoint] ? 0xb91c1c : 0x2563eb) : 0x999999;
+  startMarkers[whichEndpoint][axisKey] = new THREE.Mesh(new THREE.SphereGeometry(axisKey==='z'?0.055:0.04,12,10), new THREE.MeshBasicMaterial({ color: col }));
+  startMarkers[whichEndpoint][axisKey].position.copy(vec); scene.add(startMarkers[whichEndpoint][axisKey]);
+  // info text shows the set triple for z-start (primary) or simple marker for others
+  if(axisKey === 'z'){
+    document.getElementById(infoId).textContent = `(${fmt(vec.x)}, ${fmt(vec.y)}, ${fmt(vec.z)}) ${manualOuter[whichEndpoint] ? '· OUTER-X' : '· INNER'}`;
+  } else {
+    document.getElementById(infoId).textContent = document.getElementById(infoId).textContent || 'axis starts set';
+  }
 }
-btnSetStartA.addEventListener('click', ()=>setStartFromInputs('A'));
-btnSetStartB.addEventListener('click', ()=>setStartFromInputs('B'));
-chkAOuter.addEventListener('change', ()=>{ manualOuter.A = chkAOuter.checked; if(starts.A && startMarkers.A){ startMarkers.A.material.color.setHex(manualOuter.A?0xb91c1c:0x2563eb); }});
-chkBOuter.addEventListener('change', ()=>{ manualOuter.B = chkBOuter.checked; if(starts.B && startMarkers.B){ startMarkers.B.material.color.setHex(manualOuter.B?0xb91c1c:0x2563eb); }});
+
+/* wiring buttons for A */
+btnSetStartAx.addEventListener('click', ()=>setStartAxis('A','x','startAx', 'startA-info'));
+btnSetStartAy.addEventListener('click', ()=>setStartAxis('A','y','startAy', 'startA-info'));
+btnSetStartAz.addEventListener('click', ()=>setStartAxis('A','z','startAz', 'startA-info'));
+
+/* wiring buttons for B */
+btnSetStartBx.addEventListener('click', ()=>setStartAxis('B','x','startBx', 'startB-info'));
+btnSetStartBy.addEventListener('click', ()=>setStartAxis('B','y','startBy', 'startB-info'));
+btnSetStartBz.addEventListener('click', ()=>setStartAxis('B','z','startBz', 'startB-info'));
+
+chkAOuter.addEventListener('change', ()=>{
+  manualOuter.A = chkAOuter.checked;
+  if(starts.A.z && startMarkers.A.z){ startMarkers.A.z.material.color.setHex(manualOuter.A?0xb91c1c:0x2563eb); }
+});
+chkBOuter.addEventListener('change', ()=>{
+  manualOuter.B = chkBOuter.checked;
+  if(starts.B.z && startMarkers.B.z){ startMarkers.B.z.material.color.setHex(manualOuter.B?0xb91c1c:0x2563eb); }
+});
 
 /* ---------- All-axis infinite (optional visual) ---------- */
 let modeAll=false, modeHit=false;
@@ -640,16 +854,15 @@ btnAll.addEventListener('click', ()=>{
 });
 btnHit.addEventListener('click', ()=>{
   modeHit = !modeHit; if(modeHit) modeAll=false; updateButtons();
-  computeStatus.textContent = modeHit ? 'Use "Compute 8 Points" to see results.' : '—';
+  computeStatus.textContent = modeHit ? 'Use "Compute" to see results.' : '—';
 });
 
-/* ---------- Compute 8 points for selected edge ---------- */
+/* ---------- Compute for selected edge (now using per-axis starts) ---------- */
 let lastResultJSON = null;
 
-/* ---------- corrected buildPathPlanEntry ---------- */
 function buildPathPlanEntry(pkt, name = "Mock_edge") {
-  // use v3 helper defined above
-  const startCommon = v3(pkt.start);
+  // Reuse v3 helper defined above
+  const startCommon = v3(pkt.start); // pkt.start is start_Z for backwards compatibility
   const startX = (pkt.isOuterX && pkt.xSteps) ? v3(pkt.xSteps.step2) : startCommon;
 
   // default torch quaternion(s) - identity quaternion used as placeholder
@@ -663,8 +876,8 @@ function buildPathPlanEntry(pkt, name = "Mock_edge") {
     torch_angle: [],
     touch_order: ['x','z','y'],
     touch_path: {
-      x: { start_point: startCommon, end_point: v3(pkt.touch_Z), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
-      y: { start_point: startX, end_point: v3(pkt.touch_X), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
+      x: { start_point: startX, end_point: v3(pkt.touch_Z), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
+      y: { start_point: startCommon, end_point: v3(pkt.touch_X), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
       z: { start_point: startCommon, end_point: v3(pkt.touch_Y), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd }
     }
   };
@@ -676,12 +889,12 @@ btnCompute.addEventListener('click', ()=>{
       alert('Select one edge (Ctrl/Cmd+Click) to get its two endpoints A/B.');
       return;
     }
-    const origins = {
-      A: starts.A || globalStartPoint,
-      B: starts.B || globalStartPoint
-    };
-    if(!origins.A || !origins.B){
-      alert('Provide Start A and Start B (in fields) or set a global start (Shift+Click).');
+
+    // ensure each axis has a start or global
+    const missingA = (!starts.A.x && !globalStartPoint) || (!starts.A.y && !globalStartPoint) || (!starts.A.z && !globalStartPoint);
+    const missingB = (!starts.B.x && !globalStartPoint) || (!starts.B.y && !globalStartPoint) || (!starts.B.z && !globalStartPoint);
+    if(missingA || missingB){
+      alert('Provide Start Ax/Ay/Az and Start Bx/By/Bz (in fields) or set a global start (Shift+Click) to fill missing starts.');
       return;
     }
 
@@ -695,8 +908,12 @@ btnCompute.addEventListener('click', ()=>{
     const endA = selectedVertexMeshes[0]?.position.clone();
     const endB = selectedVertexMeshes[1]?.position.clone();
 
-    const packetA = computePacketForEndpoint(origins.A, endA, pickMeshes, basis, { forceOuter: !!manualOuter.A });
-    const packetB = computePacketForEndpoint(origins.B, endB, pickMeshes, basis, { forceOuter: !!manualOuter.B });
+    // compute packets per-endpoint using per-axis starts (fall back to globalStartPoint if axis missing)
+    const startA_forCompute = { x: starts.A.x || globalStartPoint, y: starts.A.y || globalStartPoint, z: starts.A.z || globalStartPoint };
+    const startB_forCompute = { x: starts.B.x || globalStartPoint, y: starts.B.y || globalStartPoint, z: starts.B.z || globalStartPoint };
+
+    const packetA = computePacketForEndpoint(startA_forCompute, endA, pickMeshes, basis, { forceOuter: !!manualOuter.A });
+    const packetB = computePacketForEndpoint(startB_forCompute, endB, pickMeshes, basis, { forceOuter: !!manualOuter.B });
 
     showPacket('A', packetA);
     showPacket('B', packetB);
@@ -713,7 +930,7 @@ btnCompute.addEventListener('click', ()=>{
       }
     };
 
-    computeStatus.textContent = 'Computed. Outer X uses 3-step (YZ locked at endpoint).';
+    computeStatus.textContent = 'Computed. Outer X uses 3-step (YZ locked at X-start).';
     scene.add(dashedGroup); scene.add(axisMarkersGroup);
     console.log('lastResultJSON', lastResultJSON);
 
