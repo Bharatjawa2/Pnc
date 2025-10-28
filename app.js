@@ -6,6 +6,7 @@ import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 const container = document.getElementById('canvas-container');
 const fileInput = document.getElementById('file-input');
 const fileNameLabel = document.getElementById('file-name');
+const btnSendToVision = document.getElementById('btn-send-vision');
 
 const btnAll = document.getElementById('btn-all');
 const btnHit = document.getElementById('btn-hit');
@@ -729,6 +730,110 @@ btnExport.addEventListener('click', ()=>{
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href = url; a.download = 'weld_points.json'; a.click();
   URL.revokeObjectURL(url);
+});
+
+btnSendToVision.addEventListener('click', async () => {
+  console.log('SendToVision clicked');
+  if (!lastResultJSON) {
+    alert('Compute first (no weld points yet).');
+    console.warn('lastResultJSON is empty');
+    return;
+  }
+
+  const VISION_SERVER = 'http://192.168.31.58:5002'; // adjust if needed
+
+  // build payload base
+  const payload = {
+    frame: 'base',
+    data: {
+      cycle_id: `PNC_${Date.now()}`,
+      project_id: 'PNC_MANUAL'
+    },
+    segments: []
+  };
+
+  try {
+    // build segments from path_plan
+    const pathPlan = (lastResultJSON && lastResultJSON.data && lastResultJSON.data.welding_data && lastResultJSON.data.welding_data.path_plan) || [];
+    if (!Array.isArray(pathPlan) || pathPlan.length === 0) {
+      alert('No path_plan entries found inside lastResultJSON — compute first.');
+      console.error('pathPlan empty', lastResultJSON);
+      return;
+    }
+
+    for (const entry of pathPlan) {
+      const edgeName = entry.edge || '<unknown>';
+      const touchPath = entry.touch_path || {};
+      ['x','y','z'].forEach(axis => {
+        const tp = touchPath[axis];
+        if (!tp || !tp.start_point || !tp.end_point) return;
+
+        // If your server expects real-world [x,y,z] rather than v3([z,x,y]) reorder here.
+        // Current v3 returns [z,x,y] arrays; convert to [x,y,z] if needed:
+        const reorderIfV3 = arr => {
+          if (!Array.isArray(arr) || arr.length < 3) return arr;
+          // v3 produced: [v.z, v.x, v.y] -> convert to real-world [x,y,z] = [arr[1], arr[2], arr[0]]
+          return [arr[0]-400, arr[1], arr[2]];
+        };
+
+        const startArr = reorderIfV3(tp.start_point);
+        const endArr   = reorderIfV3(tp.end_point);
+
+        payload.segments.push({
+          start: startArr,
+          end: endArr,
+          q: tp.start_torch_angle || [0, 0, 0, 0],
+          touchsense: true,
+          meta: { edge: edgeName, axis }
+        });
+      });
+    }
+
+    console.log('Prepared payload:', payload);
+    if (!payload.segments.length) {
+      alert('Payload has zero segments after building — check path_plan structure.');
+      console.error('Empty segments', lastResultJSON);
+      return;
+    }
+
+    // Send request
+    const sendUrl = `${VISION_SERVER}/api/welding_data`;
+    console.log('Sending to', sendUrl, 'segments:', payload.segments.length);
+
+    const response = await fetch(sendUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      mode: 'cors', // allow CORS; server must respond with Access-Control-Allow-Origin
+      body: JSON.stringify(payload)
+    });
+
+    console.log('Fetch completed. status=', response.status, response.statusText);
+    let text;
+    try { text = await response.text(); } catch(e){ text = '<no body>'; }
+    console.log('Response body (text):', text);
+
+    if (response.ok) {
+      alert('✅ Sent to vision server!');
+      // If server returns JSON, attempt to parse
+      try {
+        const j = JSON.parse(text);
+        console.log('Response JSON:', j);
+      } catch(e) {
+        console.log('Non-JSON response: ', text);
+      }
+    } else {
+      alert('❌ Failed to send: ' + response.status + ' ' + response.statusText + '\nSee console for details.');
+      // show helpful hints
+      console.error('POST failed', { status: response.status, statusText: response.statusText, body: text });
+      if (response.status === 0) {
+        console.warn('Possible CORS or network error — check server and browser console (Network tab).');
+      }
+    }
+
+  } catch (err) {
+    alert('❌ Error while sending: ' + (err && err.message));
+    console.error('Error in SendToVision:', err);
+  }
 });
 
 /* ---------- resize + animate ---------- */
