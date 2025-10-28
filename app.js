@@ -120,6 +120,9 @@ selX.addEventListener('change', updateBasisFromUI);
 selZ.addEventListener('change', updateBasisFromUI);
 refreshBasisUI();
 
+/* ---------- small helpers ---------- */
+function v3(v){ return [v.x, v.y, v.z]; } // small helper used by export builder
+
 /* ---------- utils ---------- */
 function disposeObject(obj){
   if(!obj) return;
@@ -643,116 +646,81 @@ btnHit.addEventListener('click', ()=>{
 /* ---------- Compute 8 points for selected edge ---------- */
 let lastResultJSON = null;
 
-btnCompute.addEventListener('click', ()=>{
-  if(selectedVertexMeshes.length !== 2){
-    alert('Select one edge (Ctrl/Cmd+Click) to get its two endpoints A/B.');
-    return;
-  }
-  const origins = {
-    A: starts.A || globalStartPoint,
-    B: starts.B || globalStartPoint
-  };
-  if(!origins.A || !origins.B){
-    alert('Provide Start A and Start B (in fields) or set a global start (Shift+Click).');
-    return;
-  }
-
-  if(axisMarkersGroup){ axisMarkersGroup.children.forEach(disposeObject); scene.remove(axisMarkersGroup); axisMarkersGroup=null; }
-  if(dashedGroup){ dashedGroup.children.forEach(disposeObject); scene.remove(dashedGroup); dashedGroup=null; }
-  axisMarkersGroup = new THREE.Group(); dashedGroup = new THREE.Group();
-
-  const basis = { x: currentBasis.x.clone(), y: currentBasis.y.clone(), z: currentBasis.z.clone() };
-
-  // Endpoint world positions from selection
-  const endA = selectedVertexMeshes[0]?.position.clone();
-  const endB = selectedVertexMeshes[1]?.position.clone();
-
-  const packetA = computePacketForEndpoint(origins.A, endA, pickMeshes, basis, { forceOuter: !!manualOuter.A });
-  const packetB = computePacketForEndpoint(origins.B, endB, pickMeshes, basis, { forceOuter: !!manualOuter.B });
-
-  showPacket('A', packetA);
-  showPacket('B', packetB);
-
-  // ---- JSON helpers ----
-const v3 = (v) => [v.x, v.y, v.z];
-
-function buildPathPlanEntry(pkt) {
-  // If outer-X, X start_point is step2; otherwise use the endpoint's start.
+/* ---------- corrected buildPathPlanEntry ---------- */
+function buildPathPlanEntry(pkt, name = "Mock_edge") {
+  // use v3 helper defined above
   const startCommon = v3(pkt.start);
   const startX = (pkt.isOuterX && pkt.xSteps) ? v3(pkt.xSteps.step2) : startCommon;
 
+  // default torch quaternion(s) - identity quaternion used as placeholder
+  const defaultTorchStart = [1, 0, 0, 0];
+  const defaultTorchEnd   = [1, 0, 0, 0];
+
   return {
-    edge: "Mock_edge",
-    id: "",                       // empty, as requested
-    buffer_point: [],             // empty
-    torch_angle: [],              // empty
-    touch_order: ['x','z','y'],   // fixed order requested
-    touch: {
-      x: { start_point: startX,        end_point: v3(pkt.touch_X) },
-      y: { start_point: startCommon,   end_point: v3(pkt.touch_Y) },
-      z: { start_point: startCommon,   end_point: v3(pkt.touch_Z) },
+    edge: name,
+    id: "",
+    buffer_point: [],
+    torch_angle: [],
+    touch_order: ['x','z','y'],
+    touch_path: {
+      x: { start_point: startCommon, end_point: v3(pkt.touch_X), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
+      y: { start_point: startCommon, end_point: v3(pkt.touch_Y), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
+      z: { start_point: startCommon, end_point: v3(pkt.touch_Z), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd }
     }
   };
 }
 
-//   lastResultJSON = {
-//     edge: {
-//       endpointA: selectedVertexMeshes[0]?.position || null,
-//       endpointB: selectedVertexMeshes[1]?.position || null
-//     },
-//     basis: {
-//       X: { x: basis.x.x, y: basis.x.y, z: basis.x.z },
-//       Y: { x: basis.y.x, y: basis.y.y, z: basis.y.z },
-//       Z: { x: basis.z.x, y: basis.z.y, z: basis.z.z }
-//     },
-//     A: (() => {
-//       const base = {
-//         start:      { x: packetA.start.x,    y: packetA.start.y,    z: packetA.start.z },
-//         collide_X:  { x: packetA.raw_X.x,    y: packetA.raw_X.y,    z: packetA.raw_X.z },
-//         touch_X:    { x: packetA.touch_X.x,  y: packetA.touch_X.y,  z: packetA.touch_X.z },
-//         collide_Y:  { x: packetA.raw_Y.x,    y: packetA.raw_Y.y,    z: packetA.raw_Y.z },
-//         touch_Y:    { x: packetA.touch_Y.x,  y: packetA.touch_Y.y,  z: packetA.touch_Y.z },
-//         collide_Z:  { x: packetA.raw_Z.x,    y: packetA.raw_Z.y,    z: packetA.raw_Z.z },
-//         touch_Z:    { x: packetA.touch_Z.x,  y: packetA.touch_Z.y,  z: packetA.touch_Z.z },
-//         isOuterX: packetA.isOuterX
-//       };
-//       if (packetA.isOuterX && packetA.xSteps) {
-//         base.outerX_step1_stop = { x: packetA.xSteps.step1.x, y: packetA.xSteps.step1.y, z: packetA.xSteps.step1.z };
-//         base.outerX_step2_stop = { x: packetA.xSteps.step2.x, y: packetA.xSteps.step2.y, z: packetA.xSteps.step2.z };
-//       }
-//       return base;
-//     })(),
-//     B: (() => {
-//       const base = {
-//         start:      { x: packetB.start.x,    y: packetB.start.y,    z: packetB.start.z },
-//         collide_X:  { x: packetB.raw_X.x,    y: packetB.raw_X.y,    z: packetB.raw_X.z },
-//         touch_X:    { x: packetB.touch_X.x,  y: packetB.touch_X.y,  z: packetB.touch_X.z },
-//         collide_Y:  { x: packetB.raw_Y.x,    y: packetB.raw_Y.y,    z: packetB.raw_Y.z },
-//         touch_Y:    { x: packetB.touch_Y.x,  y: packetB.touch_Y.y,  z: packetB.touch_Y.z },
-//         collide_Z:  { x: packetB.raw_Z.x,    y: packetB.raw_Z.y,    z: packetB.raw_Z.z },
-//         touch_Z:    { x: packetB.touch_Z.x,  y: packetB.touch_Z.y,  z: packetB.touch_Z.z },
-//         isOuterX: packetB.isOuterX
-//       };
-//       if (packetB.isOuterX && packetB.xSteps) {
-//         base.outerX_step1_stop = { x: packetB.xSteps.step1.x, y: packetB.xSteps.step1.y, z: packetB.xSteps.step1.z };
-//         base.outerX_step2_stop = { x: packetB.xSteps.step2.x, y: packetB.xSteps.step2.y, z: packetB.xSteps.step2.z };
-//       }
-//       return base;
-//     })()
-//   };
-lastResultJSON = {
-    data:{
-    welding_data: {
-        edges: {}, // you asked to always name edge "Mock_edge" inside path_plan entries
-        path_plan: [
-        buildPathPlanEntry(packetA),
-        buildPathPlanEntry(packetB)
-        ]
+btnCompute.addEventListener('click', ()=>{
+  try {
+    if(selectedVertexMeshes.length !== 2){
+      alert('Select one edge (Ctrl/Cmd+Click) to get its two endpoints A/B.');
+      return;
     }
+    const origins = {
+      A: starts.A || globalStartPoint,
+      B: starts.B || globalStartPoint
+    };
+    if(!origins.A || !origins.B){
+      alert('Provide Start A and Start B (in fields) or set a global start (Shift+Click).');
+      return;
+    }
+
+    if(axisMarkersGroup){ axisMarkersGroup.children.forEach(disposeObject); scene.remove(axisMarkersGroup); axisMarkersGroup=null; }
+    if(dashedGroup){ dashedGroup.children.forEach(disposeObject); scene.remove(dashedGroup); dashedGroup=null; }
+    axisMarkersGroup = new THREE.Group(); dashedGroup = new THREE.Group();
+
+    const basis = { x: currentBasis.x.clone(), y: currentBasis.y.clone(), z: currentBasis.z.clone() };
+
+    // Endpoint world positions from selection
+    const endA = selectedVertexMeshes[0]?.position.clone();
+    const endB = selectedVertexMeshes[1]?.position.clone();
+
+    const packetA = computePacketForEndpoint(origins.A, endA, pickMeshes, basis, { forceOuter: !!manualOuter.A });
+    const packetB = computePacketForEndpoint(origins.B, endB, pickMeshes, basis, { forceOuter: !!manualOuter.B });
+
+    showPacket('A', packetA);
+    showPacket('B', packetB);
+
+    lastResultJSON = {
+      data:{
+        welding_data: {
+          edges: {},
+          path_plan: [
+            buildPathPlanEntry(packetA, "Mock_edge"),
+            buildPathPlanEntry(packetB, "Mock_edge")
+          ]
+        }
+      }
+    };
+
+    computeStatus.textContent = 'Computed. Outer X uses 3-step (YZ locked at endpoint).';
+    scene.add(dashedGroup); scene.add(axisMarkersGroup);
+    console.log('lastResultJSON', lastResultJSON);
+
+  } catch (err) {
+    console.error('Compute failed:', err);
+    alert('Compute failed — see console for details: ' + (err && err.message));
   }
-};
-  computeStatus.textContent = 'Computed. Outer X uses 3-step (YZ locked at endpoint).';
-  scene.add(dashedGroup); scene.add(axisMarkersGroup);
 });
 
 btnExport.addEventListener('click', ()=>{
