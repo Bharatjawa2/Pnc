@@ -1,3 +1,5 @@
+// app.js — Final corrected file: axis-permute -> real coords, camera compensation, and lift-to-grid
+
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
@@ -7,8 +9,6 @@ const container = document.getElementById('canvas-container');
 const fileInput = document.getElementById('file-input');
 const fileNameLabel = document.getElementById('file-name');
 const btnSendToVision = document.getElementById('btn-send-vision');
-let counter =0;
-// let c=0;
 
 const btnAll = document.getElementById('btn-all');
 const btnHit = document.getElementById('btn-hit');
@@ -40,17 +40,41 @@ const startBz = document.getElementById('startB-z');
 
 const startGlobalInfo = document.getElementById('start-global-info');
 
-/* ---------- three.js ---------- */
+/* ---------- three.js (robust Z-up initialization) ---------- */
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xf8fafc);
+
+// Defensive Z-up setup (handles different three.js builds)
+(function ensureZUp() {
+  const Z_UP = new THREE.Vector3(0,0,1);
+  if (THREE && THREE.Object3D) {
+    if (THREE.Object3D.DefaultUp && typeof THREE.Object3D.DefaultUp.set === 'function') {
+      try { THREE.Object3D.DefaultUp.set(0,0,1); } catch(e){/*ignore*/ }
+    } else if (THREE.Object3D.defaultUp && typeof THREE.Object3D.defaultUp.set === 'function') {
+      try { THREE.Object3D.defaultUp.set(0,0,1); } catch(e){/*ignore*/ }
+    } else {
+      if (!THREE.Object3D.prototype.up) THREE.Object3D.prototype.up = Z_UP.clone();
+    }
+  } else {
+    console.warn('THREE.Object3D not found when initializing Z-up.');
+  }
+})();
+
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 20000);
 camera.position.set(2,2,3);
+if (camera && camera.up && typeof camera.up.set === 'function') camera.up.set(0,0,1);
+
 const renderer = new THREE.WebGLRenderer({ antialias:true });
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
 container.appendChild(renderer.domElement);
+
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
+if (controls) {
+  if (controls.up && typeof controls.up.set === 'function') controls.up.set(0,0,1);
+  else controls.up = new THREE.Vector3(0,0,1);
+}
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.8));
 const dirLight = new THREE.DirectionalLight(0xffffff, 0.6); dirLight.position.set(4,10,3); scene.add(dirLight);
@@ -65,25 +89,24 @@ let pickMeshes = [];
 let vertexMeshes = [];
 let edgeLines = null;
 let currentHighlight = null;
-let selectedVertexMeshes = []; // [A,B] after selection
+let selectedVertexMeshes = []; // [A,B]
 let selectedLabels = [];
 let axisMarkersGroup = null;
 let infiniteLinesGroup = null;
 let dashedGroup = null;
 
-let globalStartPoint = null;   // Shift+click start (in air)
+let globalStartPoint = null;
 let globalStartMarker = null;
 
-// per-endpoint starts + markers + manual outer flags
 const starts = { A: null, B: null };
 const startMarkers = { A: null, B: null };
 const manualOuter = { A: false, B: false };
 
 /* ---------- basis (user) ---------- */
 const currentBasis = {
-  x: new THREE.Vector3(1, 0, 0), // forward
-  z: new THREE.Vector3(0, 0, 1),  // up
-  y: new THREE.Vector3()          // left = x × z
+  x: new THREE.Vector3(1, 0, 0),
+  z: new THREE.Vector3(0, 0, 1),
+  y: new THREE.Vector3()
 };
 selX.value = "+X"; selZ.value = "+Z";
 currentBasis.y.copy(currentBasis.z).cross(currentBasis.x).normalize();
@@ -123,10 +146,43 @@ selX.addEventListener('change', updateBasisFromUI);
 selZ.addEventListener('change', updateBasisFromUI);
 refreshBasisUI();
 
-/* ---------- small helpers ---------- */
-function v3(v){ return [v.x, v.z, v.y]; } // small helper used by export builder
+/* ---------- AXIS PERMUTE MATRIX (Three -> your real-world) ---------- */
+/*
+  Your convention:
+    +X = inward, -X = outward
+    +Y = left,   -Y = right
+    +Z = up,     -Z = down
 
-/* ---------- utils ---------- */
+  From earlier reasoning:
+    Xr = -three.z
+    Yr = -three.x
+    Zr =  three.y
+
+  So the matrix (applied to geometry positions) is:
+    [ 0  0 -1  0
+     -1  0  0  0
+      0  1  0  0
+      0  0  0  1 ]
+*/
+const AXIS_PERMUTE_MATRIX = new THREE.Matrix4().set(
+   0,  0, -1, 0,
+  -1,  0,  0, 0,
+   0,  1,  0, 0,
+   0,  0,  0, 1
+);
+
+/* ---------- three <-> real converters (after permutation they match) ---------- */
+function threeToReal(vec3){
+  if(!vec3) return null;
+  // After geometry permutation, reading mesh positions gives [Xr, Yr, Zr] directly
+  return [ Number(vec3.x), Number(vec3.y), Number(vec3.z) ];
+}
+function realToThree(arr){
+  if(!Array.isArray(arr) || arr.length < 3) return null;
+  return new THREE.Vector3(Number(arr[0]), Number(arr[1]), Number(arr[2]));
+}
+
+/* ---------- small helpers ---------- */
 function disposeObject(obj){
   if(!obj) return;
   if(obj.geometry) obj.geometry.dispose();
@@ -228,11 +284,7 @@ function computeAxisSearchFrom(origin, axisDir, targets, sceneBox, diag, INF){
   return { rawCollision: raw, search_point, dir: chosen.dir.clone(), buffer: buf };
 }
 
-/* ---------- X (outer) three-step ----------
-   STEP 1: outward in X (YZ locked to endpoint)
-   STEP 2: move along ±Z only, +20 mm past wall in same direction
-   STEP 3: from step2 cast along ±X targeting endpoint’s X
-------------------------------------------- */
+/* ---------- X outer 3-step ---------- */
 function computeXOuterThreeStep(
   startOrigin,
   endpointPos,
@@ -241,79 +293,93 @@ function computeXOuterThreeStep(
   sceneBox,
   diag,
   INF = 5000,
-  collideZRawFromStart = null
+  collideXRawFromStart = null
 ){
+  // basis: X = basis.x, Y = basis.y, Z = basis.z
   const X = basis.x.clone().normalize();
-  const Z = basis.z.clone().normalize();
+  const Y = basis.y.clone().normalize();
 
-  // determine inward/outward on X from start
-  const hitXplus  = firstHitAlong(startOrigin,  X, targets);
-  const hitXminus = firstHitAlong(startOrigin,  X.clone().negate(), targets);
-  let inwardDir;
-  if (hitXplus && hitXminus)
-    inwardDir = (hitXplus.distance <= hitXminus.distance) ? X : X.clone().negate();
-  else if (hitXplus)  inwardDir = X;
-  else if (hitXminus) inwardDir = X.clone().negate();
-  else                inwardDir = X;
-  const outwardDir = inwardDir.clone().negate();
+  // Determine "inward/outward" along Y (analogous to how you previously did for X)
+  const hitYplus  = firstHitAlong(startOrigin,  Y, targets);
+  const hitYminus = firstHitAlong(startOrigin,  Y.clone().negate(), targets);
+  let inwardYDir;
+  if (hitYplus && hitYminus)
+    inwardYDir = (hitYplus.distance <= hitYminus.distance) ? Y : Y.clone().negate();
+  else if (hitYplus)  inwardYDir = Y;
+  else if (hitYminus) inwardYDir = Y.clone().negate();
+  else                inwardYDir = Y; // fallback
+  const outwardYDir = inwardYDir.clone().negate();
 
-  // STEP 1: outward in X with YZ locked to endpoint
-  const outBox = intersectSceneBox(startOrigin, outwardDir, sceneBox);
-    let step1;
-    if (outBox) {
-        const extra = Math.max(diag * 0.05, 5);
-        step1 = outBox.clone().add(outwardDir.clone().multiplyScalar(extra));
-    }else{
-        step1 = startOrigin.clone().add(outwardDir.clone().multiplyScalar(INF * 0.3));
-    }
-
-  // STEP 2: pure Z move to Z wall + 20 mm
-  let collideZPoint = collideZRawFromStart;
-  if (!collideZPoint) {
-    const pzTmp = computeAxisSearchFrom(step1, Z, targets, sceneBox, diag, INF);
-    collideZPoint = pzTmp.rawCollision.clone();
+  // ---------- STEP 1: outward along Y (XZ locked to endpoint) ----------
+  // We try to intersect the scene bounding box along outwardYDir to get a reasonable step;
+  // otherwise take a long ray in that direction (INF * 0.3).
+  const outBox = intersectSceneBox(startOrigin, outwardYDir, sceneBox);
+  let step1;
+  if (outBox) {
+    const extra = Math.max(diag * 0.05, 5);
+    step1 = outBox.clone().add(outwardYDir.clone().multiplyScalar(extra));
+  } else {
+    step1 = startOrigin.clone().add(outwardYDir.clone().multiplyScalar(INF * 0.3));
   }
-  const tStep1 = step1.dot(Z);
-  const tWallZ = collideZPoint.dot(Z);
-  const delta  = tWallZ - tStep1;
-  const sign   = (delta >= 0) ? 1 : -1;
-  const EXTRA_Z_MM = 2.0;
-  const moveZMag   = Math.abs(delta) + EXTRA_Z_MM;
-  const step2 = step1.clone().add(Z.clone().multiplyScalar(sign * moveZMag));
 
-  // STEP 3: ±X cast best matching endpoint.x
-  const projX = p => p.dot(X);
-  const xEnd  = projX(endpointPos);
-  const hitPlus  = firstHitAlong(step2,  X, targets);
-  const hitMinus = firstHitAlong(step2,  X.clone().negate(), targets);
+  // ---------- STEP 2: move in X direction toward the face (try to collide in X) ----------
+  // If the caller provided an X collision hint (collideXRawFromStart), prefer it; otherwise compute.
+  let collideXPoint = collideXRawFromStart;
+  if (!collideXPoint) {
+    // computeAxisSearchFrom will return a rawCollision on the X axis from step1
+    const pxTmp = computeAxisSearchFrom(step1, X, targets, sceneBox, diag, INF);
+    collideXPoint = pxTmp.rawCollision.clone();
+  }
+
+  // Move from step1 towards collideXPoint in X by a small EXTRA amount so we're slightly past the wall.
+  const tStep1 = step1.dot(X);
+  const tWallX = collideXPoint.dot(X);
+  const deltaX  = tWallX - tStep1;
+  const signX   = (deltaX >= 0) ? 1 : -1;
+  const EXTRA_X_MM = 2.0;
+  const moveXMag   = Math.abs(deltaX) + EXTRA_X_MM;
+  const step2 = step1.clone().add(X.clone().multiplyScalar(signX * moveXMag));
+
+  // ---------- STEP 3: from step2, cast along ±Y to find best Y collision (try to collide in Y) ----------
+  const projY = p => p.dot(Y);
+  const yEnd  = projY(endpointPos);
+
+  const hitYFromStep2_Plus  = firstHitAlong(step2,  Y, targets);
+  const hitYFromStep2_Minus = firstHitAlong(step2,  Y.clone().negate(), targets);
 
   let chosenHit = null, chosenDir = null;
-  if (hitPlus && hitMinus) {
-    const xPlus  = projX(hitPlus.point);
-    const xMinus = projX(hitMinus.point);
-    const ePlus  = Math.abs(xPlus  - xEnd);
-    const eMinus = Math.abs(xMinus - xEnd);
-    if (ePlus < eMinus || (ePlus === eMinus && hitPlus.distance <= hitMinus.distance)) {
-      chosenHit = hitPlus;  chosenDir = X;
+  if (hitYFromStep2_Plus && hitYFromStep2_Minus) {
+    const yPlus  = projY(hitYFromStep2_Plus.point);
+    const yMinus = projY(hitYFromStep2_Minus.point);
+    const ePlus  = Math.abs(yPlus  - yEnd);
+    const eMinus = Math.abs(yMinus - yEnd);
+    // prefer the one whose projection is closer to endpoint's Y projection; tie-break on distance
+    if (ePlus < eMinus || (ePlus === eMinus && hitYFromStep2_Plus.distance <= hitYFromStep2_Minus.distance)) {
+      chosenHit = hitYFromStep2_Plus; chosenDir = Y;
     } else {
-      chosenHit = hitMinus; chosenDir = X.clone().negate();
+      chosenHit = hitYFromStep2_Minus; chosenDir = Y.clone().negate();
     }
-  } else if (hitPlus)  { chosenHit = hitPlus;  chosenDir = X; }
-    else if (hitMinus) { chosenHit = hitMinus; chosenDir = X.clone().negate(); }
-    else {
-      const altPlus  = intersectSceneBox(step2,  X, sceneBox);
-      const altMinus = intersectSceneBox(step2,  X.clone().negate(), sceneBox);
-      if (altPlus || altMinus) {
-        const p = altPlus ? altPlus : altMinus;
-        const d = altPlus ? X : X.clone().negate();
-        const rawCollision = p.clone();
-        const search_point = rawCollision.clone().add(d.multiplyScalar(5.0));
-        return { step1, step2, rawCollision, search_point };
-      }
-      console.warn('No ±X collision from step2; geometry may be open.');
-      return { step1, step2, rawCollision: step2.clone(), search_point: step2.clone() };
+  } else if (hitYFromStep2_Plus) {
+    chosenHit = hitYFromStep2_Plus; chosenDir = Y;
+  } else if (hitYFromStep2_Minus) {
+    chosenHit = hitYFromStep2_Minus; chosenDir = Y.clone().negate();
+  } else {
+    // No direct ±Y hit from step2 — try scene box intersection along ±Y
+    const altPlus  = intersectSceneBox(step2,  Y, sceneBox);
+    const altMinus = intersectSceneBox(step2,  Y.clone().negate(), sceneBox);
+    if (altPlus || altMinus) {
+      const p = altPlus ? altPlus : altMinus;
+      const d = altPlus ? Y : Y.clone().negate();
+      const rawCollision = p.clone();
+      const search_point = rawCollision.clone().add(d.multiplyScalar(5.0));
+      return { step1, step2, rawCollision, search_point };
     }
+    // No Y collision available — warn and return step2 as fallback
+    console.warn('No ±Y collision from step2; geometry may be open or unreachable.');
+    return { step1, step2, rawCollision: step2.clone(), search_point: step2.clone() };
+  }
 
+  // Successful Y collision chosen
   const rawCollision = chosenHit.point.clone();
   const search_point = rawCollision.clone().add(chosenDir.multiplyScalar(5.0));
   return { step1, step2, rawCollision, search_point };
@@ -325,10 +391,8 @@ function computePacketForEndpoint(startOrigin, endpointPos, targets, basis, flag
   const INF = 5000;
   const diag = sceneBox ? sceneBox.getSize(new THREE.Vector3()).length() : INF;
 
-  // Z is always single-step from start
   const pz = computeAxisSearchFrom(startOrigin, basis.z, targets, sceneBox, diag, INF);
 
-  // X: single-step, unless we force Outer-X 3-step
   let px, xStepsInfo=null, isOuterX=false;
   if (flags.forceOuter) {
     isOuterX = true;
@@ -340,7 +404,7 @@ function computePacketForEndpoint(startOrigin, endpointPos, targets, basis, flag
       sceneBox,
       diag,
       INF,
-      pz.rawCollision.clone() // use same-start Z raw as a hint
+      pz.rawCollision.clone()
     );
     px = { rawCollision: x3.rawCollision, search_point: x3.search_point };
     xStepsInfo = { step1: x3.step1, step2: x3.step2 };
@@ -348,7 +412,6 @@ function computePacketForEndpoint(startOrigin, endpointPos, targets, basis, flag
     px = computeAxisSearchFrom(startOrigin, basis.x, targets, sceneBox, diag, INF);
   }
 
-  // Y stays single-step
   const py = computeAxisSearchFrom(startOrigin, basis.y, targets, sceneBox, diag, INF);
 
   return {
@@ -385,66 +448,53 @@ function showPacket(name, pkt){
   const baseColorsOuterX = { X:0xff2e00, Y:0x00a65a, Z:0x00d0ff };
   const colors = pkt.isOuterX ? baseColorsOuterX : baseColorsInner;
 
-  // start marker
   const startColor = pkt.isOuterX ? 0xb91c1c : 0x2563eb;
   const s = new THREE.Mesh(new THREE.SphereGeometry(0.058,14,12), new THREE.MeshBasicMaterial({ color:startColor }));
   s.position.copy(pkt.start); axisMarkersGroup.add(s);
 
-  // helper for normal axis drawing (dashed to touch, red to raw, markers + label)
   const drawAxis = (axisKey, color) => {
     const touch = pkt[`touch_${axisKey}`], raw = pkt[`raw_${axisKey}`];
 
-    // dashed start → touch
     const geom = new THREE.BufferGeometry().setFromPoints([ pkt.start.clone(), touch.clone() ]);
     const mat  = new THREE.LineDashedMaterial({ color:0x666666, dashSize:0.12, gapSize:0.22 });
     const dashed = new THREE.Line(geom, mat); dashed.computeLineDistances(); dashedGroup.add(dashed);
 
-    // solid red start → raw
     const g2 = new THREE.BufferGeometry().setFromPoints([ pkt.start.clone(), raw.clone() ]);
     const l2 = new THREE.Line(g2, new THREE.LineBasicMaterial({ color:0xff0000 })); axisMarkersGroup.add(l2);
 
-    // collide and search markers
     const hitS = new THREE.Mesh(new THREE.SphereGeometry(0.04,12,10), new THREE.MeshBasicMaterial({ color:0xff0000 })); 
     hitS.position.copy(raw); axisMarkersGroup.add(hitS);
 
     const spS  = new THREE.Mesh(new THREE.SphereGeometry(0.045,12,10),new THREE.MeshBasicMaterial({ color })); 
     spS.position.copy(touch); axisMarkersGroup.add(spS);
 
-    // label
     const label = createTextSprite(`${name}:${axisKey} → (${fmt(touch.x)}, ${fmt(touch.y)}, ${fmt(touch.z)})`, 84, 'white');
     label.position.copy(pkt.start.clone().add(touch).multiplyScalar(0.5)).add(new THREE.Vector3(0,0.05,0)); 
     label.scale.setScalar(0.42);
     axisMarkersGroup.add(label); selectedLabels.push(label);
   };
 
-  // Draw Z and Y normally
   drawAxis('Z', colors.Z);
   drawAxis('Y', colors.Y);
 
-  // X: normal or 3-step outer
   if (!pkt.isOuterX) {
     drawAxis('X', colors.X);
   } else {
-    const c1 = 0xffd34d, c2 = 0xff7b00, c3 = 0x7c3aed; // Step1, Step2, Step3
+    const c1 = 0xffd34d, c2 = 0xff7b00, c3 = 0x7c3aed;
     if (pkt.xSteps) {
-      // Step1: start → step1 (outward X with YZ locked)
       const g1 = new THREE.BufferGeometry().setFromPoints([ pkt.start.clone(), pkt.xSteps.step1.clone() ]);
       axisMarkersGroup.add(new THREE.Line(g1, new THREE.LineBasicMaterial({ color:c1 })));
 
-      // Step2: step1 → step2 (pure Z)
       const g2 = new THREE.BufferGeometry().setFromPoints([ pkt.xSteps.step1.clone(), pkt.xSteps.step2.clone() ]);
       axisMarkersGroup.add(new THREE.Line(g2, new THREE.LineBasicMaterial({ color:c2 })));
 
-      // Step3: step2 → touch_X (purple)
       const g3 = new THREE.BufferGeometry().setFromPoints([ pkt.xSteps.step2.clone(), pkt.touch_X.clone() ]);
       axisMarkersGroup.add(new THREE.Line(g3, new THREE.LineBasicMaterial({ color:c3 })));
 
-      // raw (red) from step2 → raw_X
       const gRaw = new THREE.BufferGeometry().setFromPoints([ pkt.xSteps.step2.clone(), pkt.raw_X.clone() ]);
       axisMarkersGroup.add(new THREE.Line(gRaw, new THREE.LineBasicMaterial({ color:0xff0000 })));
     }
 
-    // markers for X
     const hitS = new THREE.Mesh(new THREE.SphereGeometry(0.04,12,10), new THREE.MeshBasicMaterial({ color:0xff0000 })); 
     hitS.position.copy(pkt.raw_X); axisMarkersGroup.add(hitS);
 
@@ -461,13 +511,16 @@ function showPacket(name, pkt){
   scene.add(axisMarkersGroup);
 }
 
-/* ---------- build visuals ---------- */
+/* ---------- build visuals from geometry (creates per-vertex helper spheres) ---------- */
 function buildVisualsFromGeometry(g){
   const pos = g.getAttribute('position'); if(!pos) return;
   const edgesGeom = new THREE.EdgesGeometry(g,1);
   const edgesMat = new THREE.LineBasicMaterial({ color:0x111827 });
+  // If there is an existing edgeLines object, remove it (we only keep the latest)
+  if(edgeLines){ scene.remove(edgeLines); disposeObject(edgeLines); edgeLines = null; }
   edgeLines = new THREE.LineSegments(edgesGeom, edgesMat);
   scene.add(edgeLines);
+
   const sphereGeo = new THREE.SphereGeometry(0.06,14,12);
   for(let i=0;i<pos.count;i++){
     const v = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
@@ -476,7 +529,7 @@ function buildVisualsFromGeometry(g){
   }
 }
 
-/* ---------- load OBJ ---------- */
+/* ---------- load OBJ (apply axis permutation to geometry data) ---------- */
 fileInput.addEventListener('change', ev=>{
   const f = ev.target.files && ev.target.files[0]; if(!f) return;
   const reader = new FileReader();
@@ -485,21 +538,93 @@ fileInput.addEventListener('change', ev=>{
       clearAll();
       const loader = new OBJLoader();
       const obj = loader.parse(e.target.result);
-      const box = new THREE.Box3().setFromObject(obj);
-      const center = box.getCenter(new THREE.Vector3());
+
+      // 1) Apply axis-permute to each mesh geometry BEFORE centering.
       obj.traverse(ch=>{
         if(ch.isMesh){
           ch.geometry = ch.geometry.clone();
-          ch.geometry.applyMatrix4(new THREE.Matrix4().makeTranslation(-center.x,-center.y,-center.z));
+          ch.geometry.applyMatrix4(AXIS_PERMUTE_MATRIX); // permute coords to your real-world frame
+          if (ch.geometry.attributes.normal) ch.geometry.computeVertexNormals();
           pickMeshes.push(ch);
+        }
+      });
+
+      // 2) Compute bounding box & center from transformed object and translate meshes to center
+      const boxBeforeCenter = new THREE.Box3().setFromObject(obj);
+      console.log('IMPORT DEBUG: bbox BEFORE centering:', boxBeforeCenter);
+
+      const center = boxBeforeCenter.getCenter(new THREE.Vector3());
+      // Translate geometry to center at origin
+      obj.traverse(ch=>{
+        if(ch.isMesh){
+          ch.geometry.applyMatrix4(new THREE.Matrix4().makeTranslation(-center.x,-center.y,-center.z));
+        }
+      });
+
+      // 3) Build visuals (edges + vertex helper spheres) from transformed & centered geometry
+      obj.traverse(ch=>{
+        if(ch.isMesh){
           buildVisualsFromGeometry(ch.geometry);
         }
       });
-      loadedObject = obj; scene.add(obj); fileNameLabel.textContent=f.name; zoomToFit(obj);
+
+      // 4) compute bbox after centering and lift to grid if needed
+      const bboxAfterCenter = new THREE.Box3().setFromObject(obj);
+      console.log('IMPORT DEBUG: bbox AFTER centering (before lift):', bboxAfterCenter);
+
+      // Compute how much to lift along Z so min.z === 0
+      const minZ = bboxAfterCenter.min.z;
+      const liftZ = (Number.isFinite(minZ) ? -minZ : 0);
+      const liftVec = new THREE.Vector3(0,0,liftZ);
+
+      // 5) Add object and visuals to scene (object position will be modified below)
+      loadedObject = obj; scene.add(obj);
+      fileNameLabel.textContent = f.name;
+
+      // 6) Apply lift to object + helper visuals so model sits on grid z=0
+      if (Math.abs(liftZ) > 1e-6) {
+        obj.position.add(liftVec); // move mesh instances inside obj
+        // Move edgeLines and vertex markers (they are independent objects in scene)
+        if (edgeLines) edgeLines.position.add(liftVec);
+        vertexMeshes.forEach(m => m.position.add(liftVec));
+        // Also move any start/global markers so they maintain relative placement
+        if (globalStartMarker) globalStartMarker.position.add(liftVec);
+        if (startMarkers.A) startMarkers.A.position.add(liftVec);
+        if (startMarkers.B) startMarkers.B.position.add(liftVec);
+        console.log(`IMPORT DEBUG: lifted model by ${liftZ.toFixed(4)} along +Z so min.z -> 0`);
+      }
+
+      // 7) Final bbox after lift for debugging & camera fitting
+      const bboxFinal = new THREE.Box3().setFromObject(obj);
+      console.log('IMPORT DEBUG: FINAL bbox after lift:', bboxFinal);
+
+      // 8) Zoom camera to fit the model (based on final box)
+      zoomToFit(obj);
+
+      // 9) COMPENSATE CAMERA so the visual orientation matches the ORIGINAL OBJ (pre-permute)
+      //    We apply the SAME permutation matrix to the camera position and controls.target
+      //    relative to the object's center so the view looks identical to the un-permuted import.
+      //    Use the final center (after lift).
+      const centerFinal = bboxFinal.getCenter(new THREE.Vector3());
+      (function compensateCameraForAxisPermute(centerPt){
+        const m = AXIS_PERMUTE_MATRIX;
+        const camRel = camera.position.clone().sub(centerPt);
+        camRel.applyMatrix4(m);
+        camera.position.copy(camRel.add(centerPt));
+        const tgtRel = controls.target.clone().sub(centerPt);
+        tgtRel.applyMatrix4(m);
+        controls.target.copy(tgtRel.add(centerPt));
+        if (camera.up && typeof camera.up.set === 'function') camera.up.set(0,0,1);
+        if (controls.up && typeof controls.up.set === 'function') controls.up.set(0,0,1);
+        controls.update();
+      })(centerFinal);
+
+      // done
     }catch(err){ console.error(err); alert('Failed to load OBJ: '+(err&&err.message)); }
   };
   reader.readAsText(f);
 });
+
 function zoomToFit(object3d){
   if(!object3d) return;
   const box = new THREE.Box3().setFromObject(object3d);
@@ -513,8 +638,7 @@ function zoomToFit(object3d){
   controls.target.copy(center); controls.update();
 }
 
-/* ---------- interaction ---------- */
-// Shift+Click => global start in air (convenience)
+/* ---------- interaction (Shift+Click global start, Ctrl+Click edge selection) ---------- */
 renderer.domElement.addEventListener('click', ev=>{
   const rect = renderer.domElement.getBoundingClientRect();
   mouse.x = ((ev.clientX - rect.left)/rect.width)*2 - 1;
@@ -535,58 +659,83 @@ renderer.domElement.addEventListener('click', ev=>{
     return;
   }
 
-  // Ctrl/Cmd => pick an edge and get its two endpoints A/B
-  if(!(ev.ctrlKey || ev.metaKey)) return;
-  if(!edgeLines) return;
+  // --- improved edge-pick block (replace the original Ctrl/Cmd selection code) ---
+if(!(ev.ctrlKey || ev.metaKey)) return;
+if(!edgeLines) return;
 
-  const hits = raycaster.intersectObject(edgeLines, false);
-  if (hits.length === 0) return;
-  const hit = hits[0];
+// make raycaster easier to hit thin lines (in world units)
+if (!raycaster.params) raycaster.params = {};
+if (!raycaster.params.Line) raycaster.params.Line = {};
+raycaster.params.Line.threshold = 0.06; // increase if needed (0.06 ~ 6cm depending on units)
 
-  const posAttr = edgeLines.geometry.getAttribute('position');
-  let bestA=null,bestB=null,bestD=Infinity;
-  for(let i=0;i<posAttr.count;i+=2){
-    const a=new THREE.Vector3().fromBufferAttribute(posAttr,i);
-    const b=new THREE.Vector3().fromBufferAttribute(posAttr,i+1);
-    const mid=a.clone().add(b).multiplyScalar(0.5);
-    const d=mid.distanceTo(hit.point);
-    if(d<bestD){ bestD=d; bestA=a.clone(); bestB=b.clone(); }
-  }
-  if(!bestA || !bestB) return;
+// intersect edge line segments
+const hits = raycaster.intersectObject(edgeLines, false);
+if (hits.length === 0) return;
+const hit = hits[0];
 
-  clearSelectionVisuals();
+// helper: read positions from the LineSegments geometry and convert each endpoint to world-space
+const posAttr = edgeLines.geometry.getAttribute('position');
+if (!posAttr) return;
 
-  const geo = new THREE.BufferGeometry().setFromPoints([bestA,bestB]);
-  currentHighlight = new THREE.Line(geo, new THREE.LineBasicMaterial({ color:0xff6b00 }));
-  scene.add(currentHighlight);
+let bestA = null, bestB = null, bestD = Infinity;
+const tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3(), mid = new THREE.Vector3();
+for (let i = 0; i < posAttr.count; i += 2) {
+  tmpA.set(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i));
+  tmpB.set(posAttr.getX(i+1), posAttr.getY(i+1), posAttr.getZ(i+1));
+  // transform local-space points to world-space (accounts for edgeLines.obj/obj transforms)
+  edgeLines.localToWorld(tmpA);
+  edgeLines.localToWorld(tmpB);
+  mid.copy(tmpA).add(tmpB).multiplyScalar(0.5);
+  const d = mid.distanceTo(hit.point);
+  if (d < bestD) { bestD = d; bestA = tmpA.clone(); bestB = tmpB.clone(); }
+}
+if (!bestA || !bestB) return;
 
-  function nearestVM(pt){
-    let best=null,bd=Infinity;
-    vertexMeshes.forEach(m=>{ const d=m.position.distanceTo(pt); if(d<bd){ bd=d; best=m; } });
-    return best;
-  }
-  const vA = nearestVM(bestA), vB = nearestVM(bestB);
-  const purple = 0x7c3aed;
-  [vA,vB].forEach((vm, idx)=>{
-    if(!vm) return;
-    vm.userData._prevColor = vm.material.color.getHex();
-    vm.userData._baseScale = vm.scale.x || 1;
-    vm.material.color.setHex(purple);
-    vm.scale.setScalar(1.8);
-    vm.userData._selected = true;
-    selectedVertexMeshes.push(vm);
+clearSelectionVisuals();
 
-    const tag = idx===0 ? 'A' : 'B';
-    const num = createTextSprite(tag);
-    num.position.copy(vm.position).add(new THREE.Vector3(0,0.15,0));
-    num.scale.setScalar(0.6); scene.add(num); selectedLabels.push(num);
+// highlight the selected segment (use world-space points)
+const geo = new THREE.BufferGeometry().setFromPoints([bestA, bestB]);
+currentHighlight = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0xff6b00 }));
+scene.add(currentHighlight);
 
-    const coords = createTextSprite(`(${fmt(vm.position.x)}, ${fmt(vm.position.y)}, ${fmt(vm.position.z)})`, 88, 'white');
-    coords.position.copy(vm.position).add(new THREE.Vector3(0,0.35,0));
-    coords.scale.setScalar(0.45); scene.add(coords); selectedLabels.push(coords);
+// nearest vertex-marker: find the vertex helper whose world position is nearest to each endpoint
+function nearestVMWorld(pt) {
+  let best = null, bd = Infinity;
+  const tmp = new THREE.Vector3();
+  vertexMeshes.forEach(m => {
+    m.getWorldPosition(tmp);
+    const d = tmp.distanceTo(pt);
+    if (d < bd) { bd = d; best = m; }
   });
+  return best;
+}
 
-  computeStatus.textContent = 'Edge selected. Set Start A/B (or use global).';
+const vA = nearestVMWorld(bestA), vB = nearestVMWorld(bestB);
+const purple = 0x7c3aed;
+[vA, vB].forEach((vm, idx) => {
+  if(!vm) return;
+  vm.userData._prevColor = vm.material.color.getHex();
+  vm.userData._baseScale = vm.scale.x || 1;
+  vm.material.color.setHex(purple);
+  vm.scale.setScalar(1.8);
+  vm.userData._selected = true;
+  selectedVertexMeshes.push(vm);
+
+  const tag = idx === 0 ? 'A' : 'B';
+  const num = createTextSprite(tag);
+  // use vm.getWorldPosition to place the label correctly in world-space
+  const wp = new THREE.Vector3();
+  vm.getWorldPosition(wp);
+  num.position.copy(wp).add(new THREE.Vector3(0,0.15,0));
+  num.scale.setScalar(0.6); scene.add(num); selectedLabels.push(num);
+
+  const coords = createTextSprite(`(${fmt(wp.x)}, ${fmt(wp.y)}, ${fmt(wp.z)})`, 88, 'white');
+  coords.position.copy(wp).add(new THREE.Vector3(0,0.35,0));
+  coords.scale.setScalar(0.45); scene.add(coords); selectedLabels.push(coords);
+});
+
+computeStatus.textContent = 'Edge selected. Set Start A/B (or use global).';
+
 });
 
 /* ---------- Set start by coordinate (A/B) ---------- */
@@ -646,131 +795,30 @@ btnHit.addEventListener('click', ()=>{
   computeStatus.textContent = modeHit ? 'Use "Compute 8 Points" to see results.' : '—';
 });
 
-/* ---------- Compute 8 points for selected edge ---------- */
+/* ---------- Compute & export (uses threeToReal for real-world coords) ---------- */
 let lastResultJSON = null;
 
-/* ---------- corrected buildPathPlanEntry ---------- */
-function buildPathPlanEntry(pkt, name = "Mock_edge",pointsA, pointsB) {
-  // c++;
-  // use v3 helper defined above
-  const startCommon = v3(pkt.start);
-  const startX = (pkt.isOuterX && pkt.xSteps) ? v3(pkt.xSteps.step2) : startCommon;
+function buildPathPlanEntry(pkt, name = "Mock_edge") {
+  const startCommon_real = threeToReal(pkt.start);
+  const startX_three = (pkt.isOuterX && pkt.xSteps) ? pkt.xSteps.step2 : pkt.start;
+  const startX_real = threeToReal(startX_three);
 
-  // default torch quaternion(s) - identity quaternion used as placeholder
   const defaultTorchStart = [1, 0, 0, 0];
   const defaultTorchEnd   = [1, 0, 0, 0];
-  // if (pkt.isOuterX && pkt.xSteps){
-  //   return {
-  //     edge: name,
-  //     id: "",
-  //     buffer_point: [],
-  //     torch_angle: [],
-  //     touch_order: ['x','z','y'],
-  //     // Start_A:pointsA,
-  //     // Start_B:pointsB,
-      
-  //     touch_path: {
-  //       x: { start_point: startCommon, end_point: v3(pkt.touch_Z), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
-  //       y: { start_point: startX, end_point: v3(pkt.touch_X), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
-  //       z: { start_point: startCommon, end_point: v3(pkt.touch_Y), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd }
-  //     }
-  //   };
-  // }
-  // else{
-    // if(c==0 || c==3){
-    //   return {
-    //     edge: name,
-    //     id: "",
-    //     buffer_point: [],
-    //     torch_angle: [],
-    //     touch_order: ['x','z','y'],
-    //     // Start_A:pointsA,
-    //     // Start_B:pointsB,
-        
-    //     touch_path: {
-    //       air_points: {start_point : {"x":120,"y":120,"z":120} , end_point: {"x":120,"y":120,"z":120}},
-    //       x: { start_point: startCommon, end_point: v3(pkt.touch_X), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
-    //       y: { start_point: startX, end_point: v3(pkt.touch_Z), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
-    //       z: { start_point: startCommon, end_point: v3(pkt.touch_Y), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
-    //     },
-    //   };
-    // }
-    // else{
-      return {
-      edge: name,
-      id: "",
-      buffer_point: [],
-      torch_angle: [],
-      touch_order: ['x','z','y'],
-      // Start_A:pointsA,
-      // Start_B:pointsB,
-      
-      touch_path: {
-        x: { start_point: startCommon, end_point: v3(pkt.touch_X), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
-        y: { start_point: startX, end_point: v3(pkt.touch_Z), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
-        z: { start_point: startCommon, end_point: v3(pkt.touch_Y), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
-      },
-    };
-  // }
+
+  return {
+    edge: name,
+    id: "",
+    buffer_point: [],
+    torch_angle: [],
+    touch_order: ['x','z','y'],
+    touch_path: {
+      x: { start_point: startX_real, end_point: threeToReal(pkt.touch_X), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
+      y: { start_point: startCommon_real, end_point: threeToReal(pkt.touch_Y), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
+      z: { start_point: startCommon_real, end_point: threeToReal(pkt.touch_Z), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd }
+    }
+  };
 }
-
-// btnCompute.addEventListener('click', ()=>{
-//   try {
-//     if(selectedVertexMeshes.length !== 2){
-//       alert('Select one edge (Ctrl/Cmd+Click) to get its two endpoints A/B.');
-//       return;
-//     }
-//     const origins = {
-//       A: starts.B || globalStartPoint,
-//       B: starts.A || globalStartPoint
-//     };
-//     if(!origins.A || !origins.B){
-//       alert('Provide Start A and Start B (in fields) or set a global start (Shift+Click).');
-//       return;
-//     }
-
-//     if(axisMarkersGroup){ axisMarkersGroup.children.forEach(disposeObject); scene.remove(axisMarkersGroup); axisMarkersGroup=null; }
-//     if(dashedGroup){ dashedGroup.children.forEach(disposeObject); scene.remove(dashedGroup); dashedGroup=null; }
-//     axisMarkersGroup = new THREE.Group(); dashedGroup = new THREE.Group();
-
-//     const basis = { x: currentBasis.x.clone(), y: currentBasis.y.clone(), z: currentBasis.z.clone() };
-
-//     // Endpoint world positions from selection
-//     const endA = selectedVertexMeshes[0]?.position.clone();
-//     const endB = selectedVertexMeshes[1]?.position.clone();
-//     const aa=selectedVertexMeshes[0]?.position 
-//     const bb=selectedVertexMeshes[1]?.position 
-//     console.log("Point A: ",aa);
-//     console.log("Point B: ",bb);
-
-//     const packetA = computePacketForEndpoint(origins.A, endA, pickMeshes, basis, { forceOuter: !!manualOuter.A });
-//     const packetB = computePacketForEndpoint(origins.B, endB, pickMeshes, basis, { forceOuter: !!manualOuter.B });
-
-//     showPacket('A', packetA);
-//     showPacket('B', packetB);
-
-//     lastResultJSON = {
-//       data:{
-//         welding_data: {
-//           edges: {},
-//           path_plan: [
-//             buildPathPlanEntry(packetA, "Mock_edge", aa,bb),
-//             buildPathPlanEntry(packetB, "Mock_edge", aa, bb)
-//           ]
-//         }
-//       }
-//     };
-
-//     computeStatus.textContent = 'Computed. Outer X uses 3-step (YZ locked at endpoint).';
-//     scene.add(dashedGroup); scene.add(axisMarkersGroup);
-//     console.log('lastResultJSON', lastResultJSON);
-
-//   } catch (err) {
-//     console.error('Compute failed:', err);
-//     alert('Compute failed — see console for details: ' + (err && err.message));
-//   }
-// });
-
 
 btnCompute.addEventListener('click', ()=>{
   try {
@@ -778,12 +826,7 @@ btnCompute.addEventListener('click', ()=>{
       alert('Select one edge (Ctrl/Cmd+Click) to get its two endpoints A/B.');
       return;
     }
-    // NOTE: swapped A <-> B mapping here so selection index 0 will be treated as B and index 1 as A
-    const origins = {
-      // swapped: use start B where code previously used A, and vice-versa
-      A: starts.B || globalStartPoint,
-      B: starts.A || globalStartPoint
-    };
+    const origins = { A: starts.A || globalStartPoint, B: starts.B || globalStartPoint };
     if(!origins.A || !origins.B){
       alert('Provide Start A and Start B (in fields) or set a global start (Shift+Click).');
       return;
@@ -795,42 +838,30 @@ btnCompute.addEventListener('click', ()=>{
 
     const basis = { x: currentBasis.x.clone(), y: currentBasis.y.clone(), z: currentBasis.z.clone() };
 
-    // Endpoint world positions from selection
-    // BUT: swap the endpoints so that index 0 becomes B and index 1 becomes A
-    const endSelected0 = selectedVertexMeshes[0]?.position.clone();
-    const endSelected1 = selectedVertexMeshes[1]?.position.clone();
-    // treat selected index 0 as B and index 1 as A
-    const endA = endSelected1 ? endSelected1.clone() : null;
-    const endB = endSelected0 ? endSelected0.clone() : null;
+    const endA = selectedVertexMeshes[0]?.position.clone();
+    const endB = selectedVertexMeshes[1]?.position.clone();
+    console.log("Point A: ",endA);
+    console.log("Point B: ",endB);
 
-    const aa = selectedVertexMeshes[0]?.position;
-    const bb = selectedVertexMeshes[1]?.position;
-    console.log("End (swapped): ", v3(aa));
-    console.log("Start (swapped): ", v3(bb));
-
-    // also swap manualOuter handling: use manualOuter.B when computing packet for A, and manualOuter.A for B
-    const packetA = computePacketForEndpoint(origins.A, endA, pickMeshes, basis, { forceOuter: !!manualOuter.B });
-    const packetB = computePacketForEndpoint(origins.B, endB, pickMeshes, basis, { forceOuter: !!manualOuter.A });
+    const packetA = computePacketForEndpoint(origins.A, endA, pickMeshes, basis, { forceOuter: !!manualOuter.A });
+    const packetB = computePacketForEndpoint(origins.B, endB, pickMeshes, basis, { forceOuter: !!manualOuter.B });
 
     showPacket('A', packetA);
     showPacket('B', packetB);
 
-    // Build result JSON — ensure Start_A receives the vertex that is logically A (endA),
-    // but keep the original selected order (aa, bb) in the Start_A/Start_B fields if you prefer
     lastResultJSON = {
       data:{
         welding_data: {
           edges: {},
           path_plan: [
-            // note: we pass aa,bb as before for human-friendly values, but the packets correspond to swapped A/B above.
-            buildPathPlanEntry(packetA, "Mock_edge", v3(endA) || v3(aa), v3(endB) || v3(bb)),
-            buildPathPlanEntry(packetB, "Mock_edge", v3(endA) || v3(aa), v3(endB) || v3(bb)),
+            buildPathPlanEntry(packetA, "Mock_edge"),
+            buildPathPlanEntry(packetB, "Mock_edge")
           ]
         }
       }
     };
 
-    computeStatus.textContent = 'Computed (A/B swapped). Outer X uses 3-step (YZ locked at endpoint).';
+    computeStatus.textContent = 'Computed. Outer X uses 3-step (YZ locked at endpoint).';
     scene.add(dashedGroup); scene.add(axisMarkersGroup);
     console.log('lastResultJSON', lastResultJSON);
 
@@ -858,102 +889,58 @@ btnSendToVision.addEventListener('click', async () => {
 
   const VISION_SERVER = 'http://192.168.31.58:5002'; // adjust if needed
 
-  // build payload base
   const payload = {
     frame: 'base',
-    data: {
-      cycle_id: `PNC_${Date.now()}`,
-      project_id: 'PNC_MANUAL'
-    },
+    data: { cycle_id: `PNC_${Date.now()}`, project_id: 'PNC_MANUAL' },
     segments: []
   };
 
   try {
-    // build segments from path_plan
     const pathPlan = (lastResultJSON && lastResultJSON.data && lastResultJSON.data.welding_data && lastResultJSON.data.welding_data.path_plan) || [];
     if (!Array.isArray(pathPlan) || pathPlan.length === 0) {
       alert('No path_plan entries found inside lastResultJSON — compute first.');
-      console.error('pathPlan empty', lastResultJSON);
       return;
     }
 
     for (const entry of pathPlan) {
       const edgeName = entry.edge || '<unknown>';
       const touchPath = entry.touch_path || {};
-      ['z','x','y'].forEach(axis => {
-        counter++;
+      ['x','y','z'].forEach(axis => {
         const tp = touchPath[axis];
         if (!tp || !tp.start_point || !tp.end_point) return;
-
-        // If your server expects real-world [x,y,z] rather than v3([z,x,y]) reorder here.
-        // Current v3 returns [z,x,y] arrays; convert to [x,y,z] if needed:
-        const reorderIfV3 = arr => {
-          if (!Array.isArray(arr) || arr.length < 3) return arr;
-          return [arr[0], arr[1], arr[2]];
-        };
-
-        const startArr = reorderIfV3(tp.start_point);
-        const endArr   = reorderIfV3(tp.end_point);
-
-        function arrToXYZObject(arr) {
-          if (!Array.isArray(arr) || arr.length < 3) return { x: 0, y: 0, z: 0 };
-          return {
-            x: Number(arr[0]),
-            y: Number(arr[1]), // swap y <-> z
-            z: Number(arr[2]),
-          };
-        }
-
         payload.segments.push({
-          start: arrToXYZObject(startArr),
-          end: arrToXYZObject(endArr),
-          q: counter>3 ? [0.41321,-0.37158,-0.82007,-0.13662] : [0.16277,-0.86590,-0.24651,-0.40367],
+          edge: edgeName,
+          axis: axis,
+          start: tp.start_point,
+          end: tp.end_point,
+          q: tp.start_torch_angle || [1,0,0,0],
           touchsense: true,
         });
       });
     }
 
-    console.log('Prepared payload:', payload);
     if (!payload.segments.length) {
       alert('Payload has zero segments after building — check path_plan structure.');
-      console.error('Empty segments', lastResultJSON);
       return;
     }
 
-    // Send request
     const sendUrl = `${VISION_SERVER}/api/welding_data`;
-    console.log('Sending to', sendUrl, 'segments:', payload.segments.length);
-
     const response = await fetch(sendUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      mode: 'cors', // allow CORS; server must respond with Access-Control-Allow-Origin
+      mode: 'cors',
       body: JSON.stringify(payload)
     });
 
-    console.log('Fetch completed. status=', response.status, response.statusText);
     let text;
-    try { text = await response.text(); } catch(e){ text = '<no body>'; }
-    console.log('Response body (text):', text);
+    try { text = await response.text(); } catch (e) { text = '<no body>'; }
+    console.log('SendToVision status', response.status, response.statusText, 'body:', text);
 
     if (response.ok) {
       alert('✅ Sent to vision server!');
-      // If server returns JSON, attempt to parse
-      try {
-        const j = JSON.parse(text);
-        console.log('Response JSON:', j);
-      } catch(e) {
-        console.log('Non-JSON response: ', text);
-      }
     } else {
       alert('❌ Failed to send: ' + response.status + ' ' + response.statusText + '\nSee console for details.');
-      // show helpful hints
-      console.error('POST failed', { status: response.status, statusText: response.statusText, body: text });
-      if (response.status === 0) {
-        console.warn('Possible CORS or network error — check server and browser console (Network tab).');
-      }
     }
-
   } catch (err) {
     alert('❌ Error while sending: ' + (err && err.message));
     console.error('Error in SendToVision:', err);
