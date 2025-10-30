@@ -7,7 +7,8 @@ const container = document.getElementById('canvas-container');
 const fileInput = document.getElementById('file-input');
 const fileNameLabel = document.getElementById('file-name');
 const btnSendToVision = document.getElementById('btn-send-vision');
-let counter = 0;
+let counter =0;
+// let c=0;
 
 const btnAll = document.getElementById('btn-all');
 const btnHit = document.getElementById('btn-hit');
@@ -64,7 +65,7 @@ let pickMeshes = [];
 let vertexMeshes = [];
 let edgeLines = null;
 let currentHighlight = null;
-let selectedVertexMeshes = []; // used when single-selection visuals were enabled
+let selectedVertexMeshes = []; // [A,B] after selection
 let selectedLabels = [];
 let axisMarkersGroup = null;
 let infiniteLinesGroup = null;
@@ -328,6 +329,7 @@ function computePacketForEndpoint(startOrigin, endpointPos, targets, basis, flag
   const pz = computeAxisSearchFrom(startOrigin, basis.z, targets, sceneBox, diag, INF);
 
   // X: single-step, unless we force Outer-X 3-step
+  // TODO : -90X - Transformation
   let px, xStepsInfo=null, isOuterX=false;
   if (flags.forceOuter) {
     isOuterX = true;
@@ -554,8 +556,39 @@ renderer.domElement.addEventListener('click', ev=>{
   }
   if(!bestA || !bestB) return;
 
-  // existing behavior: clear visuals and highlight chosen edge (single-edge). We'll keep this but now toggle multi-edge selection.
-  // We will reuse and extend the multi-edge code in the next section (multi-edge selection below).
+  clearSelectionVisuals();
+
+  const geo = new THREE.BufferGeometry().setFromPoints([bestA,bestB]);
+  currentHighlight = new THREE.Line(geo, new THREE.LineBasicMaterial({ color:0xff6b00 }));
+  scene.add(currentHighlight);
+
+  function nearestVM(pt){
+    let best=null,bd=Infinity;
+    vertexMeshes.forEach(m=>{ const d=m.position.distanceTo(pt); if(d<bd){ bd=d; best=m; } });
+    return best;
+  }
+  const vA = nearestVM(bestA), vB = nearestVM(bestB);
+  const purple = 0x7c3aed;
+  [vA,vB].forEach((vm, idx)=>{
+    if(!vm) return;
+    vm.userData._prevColor = vm.material.color.getHex();
+    vm.userData._baseScale = vm.scale.x || 1;
+    vm.material.color.setHex(purple);
+    vm.scale.setScalar(1.8);
+    vm.userData._selected = true;
+    selectedVertexMeshes.push(vm);
+
+    const tag = idx===0 ? 'A' : 'B';
+    const num = createTextSprite(tag);
+    num.position.copy(vm.position).add(new THREE.Vector3(0,0.15,0));
+    num.scale.setScalar(0.6); scene.add(num); selectedLabels.push(num);
+
+    const coords = createTextSprite(`(${fmt(vm.position.x)}, ${fmt(vm.position.y)}, ${fmt(vm.position.z)})`, 88, 'white');
+    coords.position.copy(vm.position).add(new THREE.Vector3(0,0.35,0));
+    coords.scale.setScalar(0.45); scene.add(coords); selectedLabels.push(coords);
+  });
+
+  computeStatus.textContent = 'Edge selected. Set Start A/B (or use global).';
 });
 
 /* ---------- Set start by coordinate (A/B) ---------- */
@@ -612,7 +645,7 @@ btnAll.addEventListener('click', ()=>{
 });
 btnHit.addEventListener('click', ()=>{
   modeHit = !modeHit; if(modeHit) modeAll=false; updateButtons();
-  computeStatus.textContent = modeHit ? 'Use "Compute" to see results.' : '—';
+  computeStatus.textContent = modeHit ? 'Use "Compute 8 Points" to see results.' : '—';
 });
 
 /* ---------- Compute 8 points for selected edge ---------- */
@@ -620,9 +653,12 @@ let lastResultJSON = null;
 
 /* ---------- corrected buildPathPlanEntry ---------- */
 function buildPathPlanEntry(pkt, name = "Mock_edge",pointsA, pointsB) {
+  // c++;
+  // use v3 helper defined above
   const startCommon = v3(pkt.start);
   const startX = (pkt.isOuterX && pkt.xSteps) ? v3(pkt.xSteps.step2) : startCommon;
 
+  // default torch quaternion(s) - identity quaternion used as placeholder
   const defaultTorchStart = [1, 0, 0, 0];
   const defaultTorchEnd   = [1, 0, 0, 0];
   if (pkt.isOuterX && pkt.xSteps){
@@ -640,8 +676,8 @@ function buildPathPlanEntry(pkt, name = "Mock_edge",pointsA, pointsB) {
       },
     };
   }
-  else{
-    return {
+    else{
+      return {
       edge: name,
       id: "",
       buffer_point: [],
@@ -657,240 +693,78 @@ function buildPathPlanEntry(pkt, name = "Mock_edge",pointsA, pointsB) {
   }
 }
 
-/* ---------- MULTI-EDGE SELECTION + PER-EDGE UI ---------- */
+// btnCompute.addEventListener('click', ()=>{
+//   try {
+//     if(selectedVertexMeshes.length !== 2){
+//       alert('Select one edge (Ctrl/Cmd+Click) to get its two endpoints A/B.');
+//       return;
+//     }
+//     const origins = {
+//       A: starts.B || globalStartPoint,
+//       B: starts.A || globalStartPoint
+//     };
+//     if(!origins.A || !origins.B){
+//       alert('Provide Start A and Start B (in fields) or set a global start (Shift+Click).');
+//       return;
+//     }
 
-// container array for selected edges
-const selectedEdges = []; // entries: { id, aMesh, bMesh, aPos, bPos, panelEl, startA, startB, manualOuterA, manualOuterB }
+//     if(axisMarkersGroup){ axisMarkersGroup.children.forEach(disposeObject); scene.remove(axisMarkersGroup); axisMarkersGroup=null; }
+//     if(dashedGroup){ dashedGroup.children.forEach(disposeObject); scene.remove(dashedGroup); dashedGroup=null; }
+//     axisMarkersGroup = new THREE.Group(); dashedGroup = new THREE.Group();
 
-// helper: unique id for an edge (midpoint-based)
-function edgeIdForPoints(a, b){
-  const mid = a.clone().add(b).multiplyScalar(0.5);
-  return `${mid.x.toFixed(4)}_${mid.y.toFixed(4)}_${mid.z.toFixed(4)}`;
-}
+//     const basis = { x: currentBasis.x.clone(), y: currentBasis.y.clone(), z: currentBasis.z.clone() };
 
-// create per-edge UI panel in edges-list
-const edgesListContainer = document.getElementById('edges-list');
-function renderEdgePanel(edgeObj){
-  if(edgeObj.panelEl) return;
+//     // Endpoint world positions from selection
+//     const endA = selectedVertexMeshes[0]?.position.clone();
+//     const endB = selectedVertexMeshes[1]?.position.clone();
+//     const aa=selectedVertexMeshes[0]?.position 
+//     const bb=selectedVertexMeshes[1]?.position 
+//     console.log("Point A: ",aa);
+//     console.log("Point B: ",bb);
 
-  const wrapper = document.createElement('div');
-  wrapper.style.border = '1px solid #e5e7eb';
-  wrapper.style.padding = '8px';
-  wrapper.style.borderRadius = '8px';
-  wrapper.style.marginBottom = '8px';
-  wrapper.style.background = '#fff';
+//     const packetA = computePacketForEndpoint(origins.A, endA, pickMeshes, basis, { forceOuter: !!manualOuter.A });
+//     const packetB = computePacketForEndpoint(origins.B, endB, pickMeshes, basis, { forceOuter: !!manualOuter.B });
 
-  const title = document.createElement('div');
-  title.style.fontWeight = '700';
-  title.textContent = `Edge ${selectedEdges.length}:`;
-  wrapper.appendChild(title);
+//     showPacket('A', packetA);
+//     showPacket('B', packetB);
 
-  const coordsA = document.createElement('div');
-  coordsA.className = 'muted';
-  coordsA.style.marginTop = '6px';
-  coordsA.textContent = `A: (${fmt(edgeObj.aPos.x)}, ${fmt(edgeObj.aPos.y)}, ${fmt(edgeObj.aPos.z)})`;
-  wrapper.appendChild(coordsA);
+//     lastResultJSON = {
+//       data:{
+//         welding_data: {
+//           edges: {},
+//           path_plan: [
+//             buildPathPlanEntry(packetA, "Mock_edge", aa,bb),
+//             buildPathPlanEntry(packetB, "Mock_edge", aa, bb)
+//           ]
+//         }
+//       }
+//     };
 
-  const coordsB = document.createElement('div');
-  coordsB.className = 'muted';
-  coordsB.textContent = `B: (${fmt(edgeObj.bPos.x)}, ${fmt(edgeObj.bPos.y)}, ${fmt(edgeObj.bPos.z)})`;
-  wrapper.appendChild(coordsB);
+//     computeStatus.textContent = 'Computed. Outer X uses 3-step (YZ locked at endpoint).';
+//     scene.add(dashedGroup); scene.add(axisMarkersGroup);
+//     console.log('lastResultJSON', lastResultJSON);
 
-  // StartA inputs
-  const rowA = document.createElement('div');
-  rowA.style.display = 'flex';
-  rowA.style.gap = '6px';
-  rowA.style.marginTop = '8px';
-  rowA.innerHTML = `
-    <div style="flex:1">
-      <label class="muted" style="display:block;font-size:12px">Start A (x,y,z)</label>
-      <input placeholder="x" style="width:96px;padding:6px;border-radius:6px;border:1px solid #ddd" />
-      <input placeholder="y" style="width:96px;padding:6px;border-radius:6px;border:1px solid #ddd;margin-left:6px" />
-      <input placeholder="z" style="width:96px;padding:6px;border-radius:6px;border:1px solid #ddd;margin-left:6px" />
-    </div>
-    <div style="display:flex;flex-direction:column;justify-content:center;align-items:flex-end;">
-      <label style="font-size:12px"><input type="checkbox" /> Outer-X</label>
-      <button class="ctrl-btn" style="margin-top:6px;height:34px;padding:6px 10px;font-size:12px">Use Global</button>
-    </div>
-  `;
-  wrapper.appendChild(rowA);
-
-  // StartB inputs
-  const rowB = document.createElement('div');
-  rowB.style.display = 'flex';
-  rowB.style.gap = '6px';
-  rowB.style.marginTop = '8px';
-  rowB.innerHTML = `
-    <div style="flex:1">
-      <label class="muted" style="display:block;font-size:12px">Start B (x,y,z)</label>
-      <input placeholder="x" style="width:96px;padding:6px;border-radius:6px;border:1px solid #ddd" />
-      <input placeholder="y" style="width:96px;padding:6px;border-radius:6px;border:1px solid #ddd;margin-left:6px" />
-      <input placeholder="z" style="width:96px;padding:6px;border-radius:6px;border:1px solid #ddd;margin-left:6px" />
-    </div>
-    <div style="display:flex;flex-direction:column;justify-content:center;align-items:flex-end;">
-      <label style="font-size:12px"><input type="checkbox" /> Outer-X</label>
-      <button class="ctrl-btn" style="margin-top:6px;height:34px;padding:6px 10px;font-size:12px">Use Global</button>
-    </div>
-  `;
-  wrapper.appendChild(rowB);
-
-  // remove button
-  const removeBtn = document.createElement('button');
-  removeBtn.className = 'ctrl-btn';
-  removeBtn.style.marginTop = '8px';
-  removeBtn.textContent = 'Remove Edge';
-  wrapper.appendChild(removeBtn);
-
-  // wire inputs
-  const aInputs = rowA.querySelectorAll('input[placeholder]');
-  const aOuterCheckbox = rowA.querySelector('input[type=checkbox]');
-  const aUseGlobal = rowA.querySelector('button');
-
-  const bInputs = rowB.querySelectorAll('input[placeholder]');
-  const bOuterCheckbox = rowB.querySelector('input[type=checkbox]');
-  const bUseGlobal = rowB.querySelector('button');
-
-  function readVecFromInputs(list){
-    const x = parseFloat(list[0].value), y = parseFloat(list[1].value), z = parseFloat(list[2].value);
-    if(isFinite(x) && isFinite(y) && isFinite(z)) return new THREE.Vector3(x,y,z);
-    return null;
-  }
-  aInputs.forEach(inp => inp.addEventListener('change', ()=>{ edgeObj.startA = readVecFromInputs(aInputs); }));
-  bInputs.forEach(inp => inp.addEventListener('change', ()=>{ edgeObj.startB = readVecFromInputs(bInputs); }));
-  aOuterCheckbox.addEventListener('change', ()=>{ edgeObj.manualOuterA = aOuterCheckbox.checked; });
-  bOuterCheckbox.addEventListener('change', ()=>{ edgeObj.manualOuterB = bOuterCheckbox.checked; });
-
-  aUseGlobal.addEventListener('click', ()=>{
-    edgeObj.startA = null; aInputs.forEach(i=>i.value=''); edgeObj.manualOuterA = false; aOuterCheckbox.checked=false;
-  });
-  bUseGlobal.addEventListener('click', ()=>{
-    edgeObj.startB = null; bInputs.forEach(i=>i.value=''); edgeObj.manualOuterB = false; bOuterCheckbox.checked=false;
-  });
-
-  removeBtn.addEventListener('click', ()=>{
-    removeEdgeById(edgeObj.id);
-  });
-
-  edgeObj.panelEl = wrapper;
-  edgesListContainer.appendChild(wrapper);
-}
-
-// utility: remove edge by id (cleanup meshes / visuals and UI)
-function removeEdgeById(id){
-  const idx = selectedEdges.findIndex(e=>e.id===id);
-  if(idx === -1) return;
-  const edge = selectedEdges[idx];
-  [edge.aMesh, edge.bMesh].forEach(m=>{
-    if(!m) return;
-    if(m.userData._prevColor!==undefined){ m.material.color.setHex(m.userData._prevColor); delete m.userData._prevColor; }
-    if(m.userData._baseScale!==undefined){ m.scale.setScalar(m.userData._baseScale); delete m.userData._baseScale; }
-    delete m.userData._selected;
-  });
-  if(edge.panelEl){ edgesListContainer.removeChild(edge.panelEl); edge.panelEl=null; }
-  selectedEdges.splice(idx,1);
-  computeStatus.textContent = `Removed edge. ${selectedEdges.length} edges selected.`;
-}
-
-// update visuals for new selection vertex highlighting
-function highlightEdgeVertices(aMesh, bMesh){
-  const purple = 0x7c3aed;
-  [aMesh, bMesh].forEach((vm, idx)=>{
-    if(!vm) return;
-    if(vm.userData._prevColor === undefined) vm.userData._prevColor = vm.material.color.getHex();
-    if(vm.userData._baseScale === undefined) vm.userData._baseScale = vm.scale.x || 1;
-    vm.material.color.setHex(purple);
-    vm.scale.setScalar(1.6);
-    vm.userData._selected = true;
-  });
-}
-
-/* ---------- replace single-edge Ctrl/Cmd click with multi-edge toggle ---------- */
-// remove old click listener and re-add a multi-edge toggle that uses edgesList
-renderer.domElement.addEventListener('click', ev=>{
-  const rect = renderer.domElement.getBoundingClientRect();
-  mouse.x = ((ev.clientX - rect.left)/rect.width)*2 - 1;
-  mouse.y = -((ev.clientY - rect.top)/rect.height)*2 + 1;
-  raycaster.setFromCamera(mouse, camera);
-
-  // SHIFT handled earlier: global start
-  if(ev.shiftKey){
-    const originCam = camera.position.clone();
-    const ndc = new THREE.Vector3(mouse.x, mouse.y, 0.5).unproject(camera);
-    const dir = ndc.sub(camera.position).normalize();
-    const dTarget = camera.position.distanceTo(controls.target);
-    const placeDist = Math.max(0.5, dTarget * 0.6);
-    globalStartPoint = originCam.clone().add(dir.multiplyScalar(placeDist));
-    if(globalStartMarker){ scene.remove(globalStartMarker); disposeObject(globalStartMarker); }
-    globalStartMarker = new THREE.Mesh(new THREE.SphereGeometry(0.05,12,10), new THREE.MeshBasicMaterial({ color:0x8b00ff }));
-    globalStartMarker.position.copy(globalStartPoint); scene.add(globalStartMarker);
-    startGlobalInfo.textContent = `Global start: (${fmt(globalStartPoint.x)}, ${fmt(globalStartPoint.y)}, ${fmt(globalStartPoint.z)})`;
-    return;
-  }
-
-  // Only proceed for Ctrl/Cmd + click (multi-edge toggle)
-  if(!(ev.ctrlKey || ev.metaKey)) return;
-  if(!edgeLines) return;
-
-  const hits = raycaster.intersectObject(edgeLines, false);
-  if (hits.length === 0) return;
-  const hit = hits[0];
-
-  const posAttr = edgeLines.geometry.getAttribute('position');
-  let bestA=null,bestB=null,bestD=Infinity;
-  for(let i=0;i<posAttr.count;i+=2){
-    const a=new THREE.Vector3().fromBufferAttribute(posAttr,i);
-    const b=new THREE.Vector3().fromBufferAttribute(posAttr,i+1);
-    const mid=a.clone().add(b).multiplyScalar(0.5);
-    const d=mid.distanceTo(hit.point);
-    if(d<bestD){ bestD=d; bestA=a.clone(); bestB=b.clone(); }
-  }
-  if(!bestA || !bestB) return;
-
-  const id = edgeIdForPoints(bestA, bestB);
-  const already = selectedEdges.find(e=>e.id===id);
-  if(already){
-    // remove if already selected
-    removeEdgeById(id);
-    return;
-  }
-
-  // add new edge entry
-  // find nearest vertex meshes
-  function nearestVM(pt){
-    let best=null,bd=Infinity;
-    vertexMeshes.forEach(m=>{ const d=m.position.distanceTo(pt); if(d<bd){ bd=d; best=m; } });
-    return best;
-  }
-  const vA = nearestVM(bestA), vB = nearestVM(bestB);
-  if(!vA || !vB){
-    alert('Could not find vertex meshes for selected edge.');
-    return;
-  }
-
-  highlightEdgeVertices(vA, vB);
-
-  const numA = createTextSprite('A'); numA.position.copy(vA.position).add(new THREE.Vector3(0,0.12,0)); numA.scale.setScalar(0.5); scene.add(numA); selectedLabels.push(numA);
-  const numB = createTextSprite('B'); numB.position.copy(vB.position).add(new THREE.Vector3(0,0.12,0)); numB.scale.setScalar(0.5); scene.add(numB); selectedLabels.push(numB);
-
-  const edgeObj = {
-    id,
-    aMesh: vA, bMesh: vB,
-    aPos: vA.position.clone(), bPos: vB.position.clone(),
-    startA: null, startB: null,
-    manualOuterA: false, manualOuterB: false,
-    panelEl: null
-  };
-  selectedEdges.push(edgeObj);
-  renderEdgePanel(edgeObj);
-  computeStatus.textContent = `${selectedEdges.length} edge(s) selected.`;
-});
+//   } catch (err) {
+//     console.error('Compute failed:', err);
+//     alert('Compute failed — see console for details: ' + (err && err.message));
+//   }
+// });
 
 
-/* ---------- Updated compute: iterate all selectedEdges ---------- */
 btnCompute.addEventListener('click', ()=>{
   try {
-    if(selectedEdges.length === 0){
-      alert('Select one or more edges (Ctrl/Cmd+Click edges) to compute.');
+    if(selectedVertexMeshes.length !== 2){
+      alert('Select one edge (Ctrl/Cmd+Click) to get its two endpoints A/B.');
+      return;
+    }
+    // NOTE: swapped A <-> B mapping here so selection index 0 will be treated as B and index 1 as A
+    const origins = {
+      // swapped: use start B where code previously used A, and vice-versa
+      A: starts.B || globalStartPoint,
+      B: starts.A || globalStartPoint
+    };
+    if(!origins.A || !origins.B){
+      alert('Provide Start A and Start B (in fields) or set a global start (Shift+Click).');
       return;
     }
 
@@ -900,46 +774,44 @@ btnCompute.addEventListener('click', ()=>{
 
     const basis = { x: currentBasis.x.clone(), y: currentBasis.y.clone(), z: currentBasis.z.clone() };
 
-    const pathPlanEntries = [];
+    // Endpoint world positions from selection
+    // BUT: swap the endpoints so that index 0 becomes B and index 1 becomes A
+    const endSelected0 = selectedVertexMeshes[0]?.position.clone();
+    const endSelected1 = selectedVertexMeshes[1]?.position.clone();
+    // treat selected index 0 as B and index 1 as A
+    const endA = endSelected1 ? endSelected1.clone() : null;
+    const endB = endSelected0 ? endSelected0.clone() : null;
 
-    for(const edgeObj of selectedEdges){
-      // Determine origins. Priority:
-      // per-edge startA/startB -> globalStartPoint -> top-level starts.A/B -> fail
-      const originA = edgeObj.startA ? edgeObj.startA.clone()
-                    : (globalStartPoint ? globalStartPoint.clone()
-                    : (starts.A ? starts.A.clone() : null));
-      const originB = edgeObj.startB ? edgeObj.startB.clone()
-                    : (globalStartPoint ? globalStartPoint.clone()
-                    : (starts.B ? starts.B.clone() : null));
+    const aa = selectedVertexMeshes[0]?.position;
+    const bb = selectedVertexMeshes[1]?.position;
+    console.log("End (swapped): ", v3(aa));
+    console.log("Start (swapped): ", v3(bb));
 
-      if(!originA || !originB){
-        alert('Each edge requires Start A and Start B (either per-edge, global (Shift+Click) or top-level fields).');
-        return;
-      }
+    // also swap manualOuter handling: use manualOuter.B when computing packet for A, and manualOuter.A for B
+    const packetA = computePacketForEndpoint(origins.A, endA, pickMeshes, basis, { forceOuter: !!manualOuter.B });
+    const packetB = computePacketForEndpoint(origins.B, endB, pickMeshes, basis, { forceOuter: !!manualOuter.A });
 
-      // Use per-edge manualOuter flags. I kept your swapped mapping option removed/simplified:
-      const packetA = computePacketForEndpoint(originA, edgeObj.aPos.clone(), pickMeshes, basis, { forceOuter: !!edgeObj.manualOuterA });
-      const packetB = computePacketForEndpoint(originB, edgeObj.bPos.clone(), pickMeshes, basis, { forceOuter: !!edgeObj.manualOuterB });
+    showPacket('A', packetA);
+    showPacket('B', packetB);
 
-      showPacket(`Edge`, packetA);
-      showPacket(`Edge`, packetB);
-
-      pathPlanEntries.push(buildPathPlanEntry(packetA, `edge_${edgeObj.id}_A`, v3(edgeObj.aPos), v3(edgeObj.bPos)));
-      pathPlanEntries.push(buildPathPlanEntry(packetB, `edge_${edgeObj.id}_B`, v3(edgeObj.aPos), v3(edgeObj.bPos)));
-    }
-
+    // Build result JSON — ensure Start_A receives the vertex that is logically A (endA),
+    // but keep the original selected order (aa, bb) in the Start_A/Start_B fields if you prefer
     lastResultJSON = {
-      data: {
+      data:{
         welding_data: {
           edges: {},
-          path_plan: pathPlanEntries
+          path_plan: [
+            // note: we pass aa,bb as before for human-friendly values, but the packets correspond to swapped A/B above.
+            buildPathPlanEntry(packetA, "Mock_edge", v3(endA) || v3(aa), v3(endB) || v3(bb)),
+            buildPathPlanEntry(packetB, "Mock_edge", v3(endA) || v3(aa), v3(endB) || v3(bb)),
+          ]
         }
       }
     };
 
-    computeStatus.textContent = `Computed for ${selectedEdges.length} edge(s).`;
+    computeStatus.textContent = 'Computed (A/B swapped). Outer X uses 3-step (YZ locked at endpoint).';
     scene.add(dashedGroup); scene.add(axisMarkersGroup);
-    console.log('lastResultJSON (multi-edge):', lastResultJSON);
+    console.log('lastResultJSON', lastResultJSON);
 
   } catch (err) {
     console.error('Compute failed:', err);
@@ -947,7 +819,6 @@ btnCompute.addEventListener('click', ()=>{
   }
 });
 
-/* ---------- Export + Send (compat) ---------- */
 btnExport.addEventListener('click', ()=>{
   if(!lastResultJSON){ alert('Compute first.'); return; }
   const blob = new Blob([JSON.stringify(lastResultJSON, null, 2)], {type:'application/json'});
@@ -963,7 +834,6 @@ btnSendToVision.addEventListener('click', async () => {
     console.warn('lastResultJSON is empty');
     return;
   }
-  counter=0;
 
   const VISION_SERVER = 'http://192.168.31.58:5002'; // adjust if needed
 
@@ -1014,16 +884,15 @@ btnSendToVision.addEventListener('click', async () => {
               z: Number(arr[2]),
             };
           }
-          console.log("Counter : ",counter);
+
           payload.segments.push({
             start: arrToXYZObject(startArr),
             end: arrToXYZObject(endArr),
             // q: counter>3 ? [-0.38255,-0.30268,0.84649,-0.21330] : [-0.07862,-0.84578,0.30464,-0.43089],
-            // q:[0.41883,-0.34532,-0.83349,-0.10312],
+            q:[0.41883,-0.34532,-0.83349,-0.10312],
             // q: [0.18237,-0.86618,-0.25317,-0.39037],
-            q: counter>6 ? [0.18237,-0.86618,-0.25317,-0.39037] : [0.41883,-0.34532,-0.83349,-0.10312],
             touchsense: true,
-          });   
+          });
         });
       }
       else{
@@ -1055,9 +924,8 @@ btnSendToVision.addEventListener('click', async () => {
             start: arrToXYZObject(startArr),
             end: arrToXYZObject(endArr),
             // q: counter>3 ? [-0.38255,-0.30268,0.84649,-0.21330] : [-0.07862,-0.84578,0.30464,-0.43089],
-            // q:[0.41883,-0.34532,-0.83349,-0.10312],
+            q:[0.41883,-0.34532,-0.83349,-0.10312],
             // q: [0.18237,-0.86618,-0.25317,-0.39037],
-            q: counter>6 ? [0.18237,-0.86618,-0.25317,-0.39037] : [0.41883,-0.34532,-0.83349,-0.10312],
             touchsense: true,
           });
         });
@@ -1071,13 +939,14 @@ btnSendToVision.addEventListener('click', async () => {
       return;
     }
 
+    // Send request
     const sendUrl = `${VISION_SERVER}/api/welding_data`;
     console.log('Sending to', sendUrl, 'segments:', payload.segments.length);
 
     const response = await fetch(sendUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      mode: 'cors',
+      mode: 'cors', // allow CORS; server must respond with Access-Control-Allow-Origin
       body: JSON.stringify(payload)
     });
 
@@ -1088,11 +957,20 @@ btnSendToVision.addEventListener('click', async () => {
 
     if (response.ok) {
       alert('✅ Sent to vision server!');
-      try { const j = JSON.parse(text); console.log('Response JSON:', j); } catch(e){ console.log('Non-JSON response: ', text); }
+      // If server returns JSON, attempt to parse
+      try {
+        const j = JSON.parse(text);
+        console.log('Response JSON:', j);
+      } catch(e) {
+        console.log('Non-JSON response: ', text);
+      }
     } else {
       alert('❌ Failed to send: ' + response.status + ' ' + response.statusText + '\nSee console for details.');
+      // show helpful hints
       console.error('POST failed', { status: response.status, statusText: response.statusText, body: text });
-      if (response.status === 0) console.warn('Possible CORS or network error — check server and browser console (Network tab).');
+      if (response.status === 0) {
+        console.warn('Possible CORS or network error — check server and browser console (Network tab).');
+      }
     }
 
   } catch (err) {

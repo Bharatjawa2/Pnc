@@ -13,7 +13,7 @@
     .ctrl-btn.on { background:#3b82f6; color:white; border-color:#2563eb; }
     #file-label { background:#10b981; color:white; padding:8px 12px; border-radius:8px; cursor:pointer; font-weight:700; }
     #file-name { font-size:13px; color:#374151; margin-left:12px; }
-    .panel { position:absolute; left:18px; top:86px; z-index:30; background:white; border:1px solid #e5e7eb; border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,0.06); padding:12px 14px; min-width:320px; }
+    .panel { position:absolute; left:18px; top:86px; z-index:30; background:white; border:1px solid #e5e7eb; border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,0.06); padding:12px 14px; min-width:340px; max-width:420px; }
     .row { display:flex; gap:8px; align-items:center; margin:6px 0; }
     .row label { font-size:13px; color:#374151; }
     .row input[type="number"] { width:92px; padding:6px 8px; border:1px solid #d1d5db; border-radius:8px; }
@@ -64,7 +64,7 @@
     <div class="row"><label>Y = X × Z</label><span id="y-info" class="muted"></span></div>
     <hr/>
 
-       <div class="row"><strong>Start A</strong></div>
+    <div class="row"><strong>Start A</strong></div>
     <div class="row" style="gap:4px; justify-content:space-between;">
       <div style="display:flex; flex-direction:column; align-items:left;">
         <label class="muted">X   (Real World Z)</label>
@@ -106,13 +106,16 @@
       <span id="startB-info" class="muted">—</span>
     </div>
 
-
     <div class="row" style="margin-top:6px;">
-      <span class="muted">Tip: <b>Shift+Click</b> in the viewport to place a global start (in the air).</span>
+      <span class="muted">Tip: <b>Shift+Click</b> in the viewport to place a global start (in the air). <b>Ctrl/Cmd+Click</b> to toggle edges (multi-select).</span>
     </div>
     <div class="row"><span id="start-global-info" class="muted">—</span></div>
-    <hr/>
 
+    <!-- NEW: per-edge panels -->
+    <hr/>
+    <div id="edges-list" style="max-height:220px; overflow:auto; margin-bottom:8px;"></div>
+
+    <hr/>
     <div class="row">
       <button id="btn-compute" class="ctrl-btn">Compute</button>
       <button id="btn-export" class="ctrl-btn">Export JSON</button>
@@ -128,7 +131,6 @@
 
   <div id="canvas-container"></div>
 
-  <!-- Your logic file -->
   <script type="module" src="./app.js"></script>
 </body>
 </html>
