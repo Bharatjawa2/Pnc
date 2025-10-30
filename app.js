@@ -277,7 +277,7 @@ function computeXOuterThreeStep(
   const tWallZ = collideZPoint.dot(Z);
   const delta  = tWallZ - tStep1;
   const sign   = (delta >= 0) ? 1 : -1;
-  const EXTRA_Z_MM = 2.0;
+  const EXTRA_Z_MM = 0.5;
   const moveZMag   = Math.abs(delta) + EXTRA_Z_MM;
   const step2 = step1.clone().add(Z.clone().multiplyScalar(sign * moveZMag));
 
@@ -329,6 +329,7 @@ function computePacketForEndpoint(startOrigin, endpointPos, targets, basis, flag
   const pz = computeAxisSearchFrom(startOrigin, basis.z, targets, sceneBox, diag, INF);
 
   // X: single-step, unless we force Outer-X 3-step
+  // TODO : -90X - Transformation
   let px, xStepsInfo=null, isOuterX=false;
   if (flags.forceOuter) {
     isOuterX = true;
@@ -344,6 +345,7 @@ function computePacketForEndpoint(startOrigin, endpointPos, targets, basis, flag
     );
     px = { rawCollision: x3.rawCollision, search_point: x3.search_point };
     xStepsInfo = { step1: x3.step1, step2: x3.step2 };
+    console.log("STEPS INFO : ",xStepsInfo)
   } else {
     px = computeAxisSearchFrom(startOrigin, basis.x, targets, sceneBox, diag, INF);
   }
@@ -659,44 +661,8 @@ function buildPathPlanEntry(pkt, name = "Mock_edge",pointsA, pointsB) {
   // default torch quaternion(s) - identity quaternion used as placeholder
   const defaultTorchStart = [1, 0, 0, 0];
   const defaultTorchEnd   = [1, 0, 0, 0];
-  // if (pkt.isOuterX && pkt.xSteps){
-  //   return {
-  //     edge: name,
-  //     id: "",
-  //     buffer_point: [],
-  //     torch_angle: [],
-  //     touch_order: ['x','z','y'],
-  //     // Start_A:pointsA,
-  //     // Start_B:pointsB,
-      
-  //     touch_path: {
-  //       x: { start_point: startCommon, end_point: v3(pkt.touch_Z), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
-  //       y: { start_point: startX, end_point: v3(pkt.touch_X), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
-  //       z: { start_point: startCommon, end_point: v3(pkt.touch_Y), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd }
-  //     }
-  //   };
-  // }
-  // else{
-    // if(c==0 || c==3){
-    //   return {
-    //     edge: name,
-    //     id: "",
-    //     buffer_point: [],
-    //     torch_angle: [],
-    //     touch_order: ['x','z','y'],
-    //     // Start_A:pointsA,
-    //     // Start_B:pointsB,
-        
-    //     touch_path: {
-    //       air_points: {start_point : {"x":120,"y":120,"z":120} , end_point: {"x":120,"y":120,"z":120}},
-    //       x: { start_point: startCommon, end_point: v3(pkt.touch_X), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
-    //       y: { start_point: startX, end_point: v3(pkt.touch_Z), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
-    //       z: { start_point: startCommon, end_point: v3(pkt.touch_Y), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
-    //     },
-    //   };
-    // }
-    // else{
-      return {
+  if (pkt.isOuterX && pkt.xSteps){
+    return {
       edge: name,
       id: "",
       buffer_point: [],
@@ -706,12 +672,28 @@ function buildPathPlanEntry(pkt, name = "Mock_edge",pointsA, pointsB) {
       // Start_B:pointsB,
       
       touch_path: {
+        x: { start_point: startCommon, end_point: v3(pkt.touch_Z), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
+        y: { start_point: startX, end_point: v3(pkt.touch_X), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
+        z: { start_point: startCommon, end_point: v3(pkt.touch_Y), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
+      },
+    };
+  }
+    else{
+      return {
+      edge: name,
+      id: "",
+      buffer_point: [],
+      torch_angle: [],
+      touch_order: ['x','z','y'],
+      // Start_A:pointsA,
+      // Start_B:pointsB,
+      touch_path: {
         x: { start_point: startCommon, end_point: v3(pkt.touch_X), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
         y: { start_point: startX, end_point: v3(pkt.touch_Z), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
         z: { start_point: startCommon, end_point: v3(pkt.touch_Y), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
       },
     };
-  // }
+  }
 }
 
 // btnCompute.addEventListener('click', ()=>{
@@ -907,7 +889,9 @@ btnSendToVision.addEventListener('click', async () => {
         payload.segments.push({
           start: arrToXYZObject(startArr),
           end: arrToXYZObject(endArr),
-          q: counter>3 ? [0.41321,-0.37158,-0.82007,-0.13662] : [0.16277,-0.86590,-0.24651,-0.40367],
+          // q: counter>3 ? [-0.38255,-0.30268,0.84649,-0.21330] : [-0.07862,-0.84578,0.30464,-0.43089],
+          q:[0.41883,-0.34532,-0.83349,-0.10312],
+          // q: [0.18237,-0.86618,-0.25317,-0.39037],
           touchsense: true,
         });
       });
