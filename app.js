@@ -1,3 +1,4 @@
+// app.js (fixed: no duplicate removeSequenceEntryById)
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
@@ -7,12 +8,12 @@ const container = document.getElementById('canvas-container');
 const fileInput = document.getElementById('file-input');
 const fileNameLabel = document.getElementById('file-name');
 const btnSendToVision = document.getElementById('btn-send-vision');
-let counter = 0;
 
 const btnAll = document.getElementById('btn-all');
 const btnHit = document.getElementById('btn-hit');
 const btnCompute = document.getElementById('btn-compute');
 const btnExport = document.getElementById('btn-export');
+const btnToggleVoxels = document.getElementById('btn-toggle-voxels');
 
 const selX = document.getElementById('sel-x');
 const selZ = document.getElementById('sel-z');
@@ -38,6 +39,7 @@ const startBy = document.getElementById('startB-y');
 const startBz = document.getElementById('startB-z');
 
 const startGlobalInfo = document.getElementById('start-global-info');
+const edgesListContainer = document.getElementById('edges-list');
 
 /* ---------- three.js ---------- */
 const scene = new THREE.Scene();
@@ -60,14 +62,12 @@ const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
 
 let loadedObject = null;
-let pickMeshes = [];
-let vertexMeshes = [];
-let edgeLines = null;
+let pickMeshes = [];          // meshes from OBJ (used for collision & inside tests)
+let vertexMeshes = [];        // the vertex point spheres
+let edgeLines = null;         // edges LineSegments
 let currentHighlight = null;
-let selectedVertexMeshes = []; // used when single-selection visuals were enabled
 let selectedLabels = [];
 let axisMarkersGroup = null;
-let infiniteLinesGroup = null;
 let dashedGroup = null;
 
 let globalStartPoint = null;   // Shift+click start (in air)
@@ -78,11 +78,18 @@ const starts = { A: null, B: null };
 const startMarkers = { A: null, B: null };
 const manualOuter = { A: false, B: false };
 
+/* ---------- sequence & selections ---------- */
+const selectionSequence = [];
+const selectedEdges = []; // selected edges array
+let voxelGroup = null;
+const voxelMeshes = [];
+const selectedVoxels = [];
+
 /* ---------- basis (user) ---------- */
 const currentBasis = {
-  x: new THREE.Vector3(1, 0, 0), // forward
-  z: new THREE.Vector3(0, 0, 1),  // up
-  y: new THREE.Vector3()          // left = x × z
+  x: new THREE.Vector3(1, 0, 0),
+  z: new THREE.Vector3(0, 0, 1),
+  y: new THREE.Vector3()
 };
 selX.value = "+X"; selZ.value = "+Z";
 currentBasis.y.copy(currentBasis.z).cross(currentBasis.x).normalize();
@@ -105,6 +112,8 @@ function refreshBasisUI(){
   zInfo.textContent = `(${currentBasis.z.x|0}, ${currentBasis.z.y|0}, ${currentBasis.z.z|0})`;
   yInfo.textContent = `(${currentBasis.y.x|0}, ${currentBasis.y.y|0}, ${currentBasis.y.z|0})`;
 }
+selX.addEventListener('change', updateBasisFromUI);
+selZ.addEventListener('change', updateBasisFromUI);
 function updateBasisFromUI(){
   const bx = vecFromSelectValue(selX.value).clone().normalize();
   const bz = vecFromSelectValue(selZ.value).clone().normalize();
@@ -118,38 +127,32 @@ function updateBasisFromUI(){
   currentBasis.y.copy(currentBasis.x).cross(currentBasis.z).normalize();
   refreshBasisUI();
 }
-selX.addEventListener('change', updateBasisFromUI);
-selZ.addEventListener('change', updateBasisFromUI);
-refreshBasisUI();
 
 /* ---------- small helpers ---------- */
-function v3(v){ return [v.x, v.z, v.y]; } // small helper used by export builder
+function v3(v){ return [v.x, v.z, v.y]; }
 
 /* ---------- utils ---------- */
 function disposeObject(obj){
   if(!obj) return;
-  if(obj.geometry) obj.geometry.dispose();
-  if(obj.material){
-    if(Array.isArray(obj.material)) obj.material.forEach(m=>{ if(m.map) m.map.dispose(); m.dispose(); });
-    else { if(obj.material.map) obj.material.map.dispose(); obj.material.dispose(); }
-  }
+  try{
+    if(obj.geometry) obj.geometry.dispose();
+    if(obj.material){
+      if(Array.isArray(obj.material)) obj.material.forEach(m=>{ if(m.map) m.map.dispose(); m.dispose(); });
+      else { if(obj.material.map) obj.material.map.dispose(); obj.material.dispose(); }
+    }
+  }catch(e){}
 }
 function clearSelectionVisuals(){
-  if(currentHighlight){ scene.remove(currentHighlight); disposeObject(currentHighlight); currentHighlight=null; }
   selectedLabels.forEach(s=>{ scene.remove(s); if(s.material && s.material.map) s.material.map.dispose(); if(s.material) s.material.dispose(); });
   selectedLabels = [];
-  selectedVertexMeshes.forEach(m=>{
-    if(m.userData._prevColor!==undefined){ m.material.color.setHex(m.userData._prevColor); delete m.userData._prevColor; }
-    if(m.userData._baseScale!==undefined){ m.scale.setScalar(m.userData._baseScale); delete m.userData._baseScale; }
-    delete m.userData._selected;
-  });
-  selectedVertexMeshes = [];
   if(axisMarkersGroup){ axisMarkersGroup.children.forEach(c=>disposeObject(c)); scene.remove(axisMarkersGroup); axisMarkersGroup=null; }
-  if(infiniteLinesGroup){ infiniteLinesGroup.children.forEach(c=>disposeObject(c)); scene.remove(infiniteLinesGroup); infiniteLinesGroup=null; }
   if(dashedGroup){ dashedGroup.children.forEach(c=>disposeObject(c)); scene.remove(dashedGroup); dashedGroup=null; }
 }
 function clearAll(){
   clearSelectionVisuals();
+  while(selectedEdges.length) removeEdgeById(selectedEdges[0].id);
+  while(selectedVoxels.length) removeVoxelById(selectedVoxels[0].id);
+  if(voxelGroup){ voxelGroup.children.forEach(m=>{ scene.remove(m); disposeObject(m); }); scene.remove(voxelGroup); voxelGroup=null; voxelMeshes.length=0; }
   if(edgeLines){ scene.remove(edgeLines); disposeObject(edgeLines); edgeLines=null; }
   vertexMeshes.forEach(m=>{ scene.remove(m); disposeObject(m); }); vertexMeshes=[];
   pickMeshes=[]; if(loadedObject){ scene.remove(loadedObject); loadedObject=null; }
@@ -159,12 +162,15 @@ function clearAll(){
   ['A','B'].forEach(k=>{
     if(startMarkers[k]){ scene.remove(startMarkers[k]); disposeObject(startMarkers[k]); startMarkers[k]=null; }
     starts[k]=null; manualOuter[k]=false;
-    document.getElementById(`start${k}-x`).value = '';
-    document.getElementById(`start${k}-y`).value = '';
-    document.getElementById(`start${k}-z`).value = '';
-    document.getElementById(`start${k}-info`).textContent='—';
-    document.getElementById(`chk${k}-outer`).checked = false;
+    const elx=document.getElementById(`start${k}-x`); if(elx) elx.value='';
+    const ely=document.getElementById(`start${k}-y`); if(ely) ely.value='';
+    const elz=document.getElementById(`start${k}-z`); if(elz) elz.value='';
+    const infoEl=document.getElementById(`start${k}-info`); if(infoEl) infoEl.textContent='—';
+    const chk=document.getElementById(`chk${k}-outer`); if(chk) chk.checked=false;
   });
+  if(edgesListContainer) edgesListContainer.innerHTML='';
+  lastResultJSON = null;
+  computeStatus.textContent = '—';
 }
 
 /* ---------- geometry helpers ---------- */
@@ -180,13 +186,8 @@ function firstHitAlong(origin, dir, targets){
   hits = hits.filter(h=>h.distance>1e-6);
   return hits.length ? hits[0] : null;
 }
-function intersectSceneBox(origin, dir, sceneBox) {
-  if (!sceneBox) return null;
-  const ray = new THREE.Ray(origin, dir.clone().normalize());
-  const p = new THREE.Vector3();
-  const hit = ray.intersectBox(sceneBox, p);
-  return hit ? p.clone() : null;
-}
+
+/* ---------- packet / compute helpers ---------- */
 function computeBuffer(hitDist, diag, INF){
   const minBufFactor=0.02, maxBufFactor=0.5;
   const minBuf=Math.max(1e-4, diag*minBufFactor);
@@ -196,8 +197,6 @@ function computeBuffer(hitDist, diag, INF){
   if(hitDist > INF*0.9) buffer = Math.min(buffer, INF*0.2);
   return buffer;
 }
-
-/* ---------- core single-step (X, Y, Z) ---------- */
 function computeAxisSearchFrom(origin, axisDir, targets, sceneBox, diag, INF){
   const dirPos = axisDir.clone().normalize();
   const dirNeg = dirPos.clone().negate();
@@ -226,47 +225,28 @@ function computeAxisSearchFrom(origin, axisDir, targets, sceneBox, diag, INF){
   const search_point = raw.clone().add(chosen.dir.clone().multiplyScalar(buf));
   return { rawCollision: raw, search_point, dir: chosen.dir.clone(), buffer: buf };
 }
-
-/* ---------- X (outer) three-step ----------
-   STEP 1: outward in X (YZ locked to endpoint)
-   STEP 2: move along ±Z only, +20 mm past wall in same direction
-   STEP 3: from step2 cast along ±X targeting endpoint’s X
-------------------------------------------- */
-function computeXOuterThreeStep(
-  startOrigin,
-  endpointPos,
-  basis,
-  targets,
-  sceneBox,
-  diag,
-  INF = 5000,
-  collideZRawFromStart = null
-){
+function computeXOuterThreeStep(startOrigin, endpointPos, basis, targets, sceneBox, diag, INF = 5000, collideZRawFromStart = null){
   const X = basis.x.clone().normalize();
   const Z = basis.z.clone().normalize();
 
-  // determine inward/outward on X from start
   const hitXplus  = firstHitAlong(startOrigin,  X, targets);
   const hitXminus = firstHitAlong(startOrigin,  X.clone().negate(), targets);
   let inwardDir;
-  if (hitXplus && hitXminus)
-    inwardDir = (hitXplus.distance <= hitXminus.distance) ? X : X.clone().negate();
+  if (hitXplus && hitXminus) inwardDir = (hitXplus.distance <= hitXminus.distance) ? X : X.clone().negate();
   else if (hitXplus)  inwardDir = X;
   else if (hitXminus) inwardDir = X.clone().negate();
-  else                inwardDir = X;
+  else inwardDir = X;
   const outwardDir = inwardDir.clone().negate();
 
-  // STEP 1: outward in X with YZ locked to endpoint
   const outBox = intersectSceneBox(startOrigin, outwardDir, sceneBox);
-    let step1;
-    if (outBox) {
-        const extra = Math.max(diag * 0.05, 5);
-        step1 = outBox.clone().add(outwardDir.clone().multiplyScalar(extra));
-    }else{
-        step1 = startOrigin.clone().add(outwardDir.clone().multiplyScalar(INF * 0.3));
-    }
+  let step1;
+  if (outBox) {
+    const extra = Math.max(diag * 0.05, 5);
+    step1 = outBox.clone().add(outwardDir.clone().multiplyScalar(extra));
+  } else {
+    step1 = startOrigin.clone().add(outwardDir.clone().multiplyScalar(INF * 0.3));
+  }
 
-  // STEP 2: pure Z move to Z wall + 20 mm
   let collideZPoint = collideZRawFromStart;
   if (!collideZPoint) {
     const pzTmp = computeAxisSearchFrom(step1, Z, targets, sceneBox, diag, INF);
@@ -280,7 +260,6 @@ function computeXOuterThreeStep(
   const moveZMag   = Math.abs(delta) + EXTRA_Z_MM;
   const step2 = step1.clone().add(Z.clone().multiplyScalar(sign * moveZMag));
 
-  // STEP 3: ±X cast best matching endpoint.x
   const projX = p => p.dot(X);
   const xEnd  = projX(endpointPos);
   const hitPlus  = firstHitAlong(step2,  X, targets);
@@ -317,51 +296,15 @@ function computeXOuterThreeStep(
   const search_point = rawCollision.clone().add(chosenDir.multiplyScalar(5.0));
   return { step1, step2, rawCollision, search_point };
 }
-
-/* ---------- packet computation ---------- */
-function computePacketForEndpoint(startOrigin, endpointPos, targets, basis, flags){
-  const sceneBox = computeCombinedBox(targets);
-  const INF = 5000;
-  const diag = sceneBox ? sceneBox.getSize(new THREE.Vector3()).length() : INF;
-
-  // Z is always single-step from start
-  const pz = computeAxisSearchFrom(startOrigin, basis.z, targets, sceneBox, diag, INF);
-
-  // X: single-step, unless we force Outer-X 3-step
-  let px, xStepsInfo=null, isOuterX=false;
-  if (flags.forceOuter) {
-    isOuterX = true;
-    const x3 = computeXOuterThreeStep(
-      startOrigin,
-      endpointPos,
-      basis,
-      targets,
-      sceneBox,
-      diag,
-      INF,
-      pz.rawCollision.clone() // use same-start Z raw as a hint
-    );
-    px = { rawCollision: x3.rawCollision, search_point: x3.search_point };
-    xStepsInfo = { step1: x3.step1, step2: x3.step2 };
-    console.log("STEPS INFO : ",xStepsInfo)
-  } else {
-    px = computeAxisSearchFrom(startOrigin, basis.x, targets, sceneBox, diag, INF);
-  }
-
-  // Y stays single-step
-  const py = computeAxisSearchFrom(startOrigin, basis.y, targets, sceneBox, diag, INF);
-
-  return {
-    start: startOrigin.clone(),
-    touch_X: px.search_point.clone(), raw_X: px.rawCollision.clone(),
-    touch_Y: py.search_point.clone(), raw_Y: py.rawCollision.clone(),
-    touch_Z: pz.search_point.clone(), raw_Z: pz.rawCollision.clone(),
-    isOuterX,
-    xSteps: xStepsInfo
-  };
+function intersectSceneBox(origin, dir, sceneBox) {
+  if (!sceneBox) return null;
+  const ray = new THREE.Ray(origin, dir.clone().normalize());
+  const p = new THREE.Vector3();
+  const hit = ray.intersectBox(sceneBox, p);
+  return hit ? p.clone() : null;
 }
 
-/* ---------- visuals ---------- */
+/* ---------- visuals / labels ---------- */
 function createTextSprite(text, fontSize=140, fill='white'){
   const canvas = document.createElement('canvas'); const s=256; canvas.width=s; canvas.height=s;
   const ctx = canvas.getContext('2d'); ctx.clearRect(0,0,s,s);
@@ -372,12 +315,439 @@ function createTextSprite(text, fontSize=140, fill='white'){
   const mat = new THREE.SpriteMaterial({ map:tex, depthTest:true, depthWrite:false });
   const sprite = new THREE.Sprite(mat); sprite.userData._tex = tex; return sprite;
 }
-function drawLeg(a,b,color){
-  const g = new THREE.BufferGeometry().setFromPoints([a,b]);
-  const l = new THREE.Line(g, new THREE.LineBasicMaterial({ color, transparent:true, opacity:1 }));
-  axisMarkersGroup.add(l);
+function createOrderSprite(n, color='white'){
+  const sprite = createTextSprite(String(n), 160, color);
+  sprite.scale.setScalar(0.35);
+  return sprite;
 }
+
+/* ---------- build visuals from geometry ---------- */
+function buildVisualsFromGeometry(g){
+  const pos = g.getAttribute('position'); if(!pos) return;
+  const edgesGeom = new THREE.EdgesGeometry(g,1);
+  const edgesMat = new THREE.LineBasicMaterial({ color:0x111827 });
+  edgeLines = new THREE.LineSegments(edgesGeom, edgesMat);
+  scene.add(edgeLines);
+  const sphereGeo = new THREE.SphereGeometry(0.06,14,12);
+  for(let i=0;i<pos.count;i++){
+    const v = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
+    const mat = new THREE.MeshStandardMaterial({ color:0xf97316 });
+    const mesh = new THREE.Mesh(sphereGeo, mat);
+    mesh.position.copy(v); mesh.userData._baseScale=1; scene.add(mesh); vertexMeshes.push(mesh);
+  }
+}
+
+/* ---------- selection + UI list rendering ---------- */
+let lastResultJSON = null;
+function ensureLastResult(){ if(!lastResultJSON) lastResultJSON = { data: { welding_data: { edges: {}, path_plan: [], selections: [] } } }; }
+function addSelectionToLastResult(entry){ ensureLastResult(); lastResultJSON.data.welding_data.selections.push(entry); }
+function removeSelectionFromLastResultById(id){
+  if(!lastResultJSON || !lastResultJSON.data || !lastResultJSON.data.welding_data) return;
+  const sel = lastResultJSON.data.welding_data.selections;
+  const idx = sel.findIndex(s=>s.id===id);
+  if(idx!==-1) sel.splice(idx,1);
+  for(const s of lastResultJSON.data.welding_data.selections){
+    const seqIdx = selectionSequence.findIndex(x=>x.id===s.id);
+    s.order = seqIdx===-1? s.order : (seqIdx+1);
+  }
+}
+
+/* ---------- sequence helpers ---------- */
+function addSequenceEntry(type, ref, id, pos){
+  const entry = { type, ref, id };
+  selectionSequence.push(entry);
+  const order = selectionSequence.length;
+  const sprite = createOrderSprite(order, 'white');
+  sprite.position.copy(pos.clone().add(new THREE.Vector3(0,0.08,0)));
+  sprite.renderOrder = 9999;
+  sprite.material.depthTest = false;
+  scene.add(sprite); selectedLabels.push(sprite);
+  ref._orderSprite = sprite;
+  ref._order = order;
+  addSelectionToLastResult({ type, id, order, coords: [ Number(pos.x.toFixed(4)), Number(pos.y.toFixed(4)), Number(pos.z.toFixed(4)) ] });
+  renderSelectionsList();
+}
+function removeSequenceEntryById(id){
+  const idx = selectionSequence.findIndex(s=>s.id===id);
+  if(idx===-1) return;
+  const removed = selectionSequence.splice(idx,1)[0];
+  const ref = removed.ref;
+  if(ref && ref._orderSprite){ scene.remove(ref._orderSprite); if(ref._orderSprite.material && ref._orderSprite.material.map) ref._orderSprite.material.map.dispose(); if(ref._orderSprite.material) ref._orderSprite.material.dispose(); ref._orderSprite=null; }
+  for(let i=0;i<selectionSequence.length;i++){
+    const s = selectionSequence[i];
+    const newOrder = i+1;
+    s.ref._order = newOrder;
+    if(s.ref._orderSprite){
+      scene.remove(s.ref._orderSprite);
+      if(s.ref._orderSprite.material && s.ref._orderSprite.material.map) s.ref._orderSprite.material.map.dispose();
+      if(s.ref._orderSprite.material) s.ref._orderSprite.material.dispose();
+      const sprite = createOrderSprite(newOrder,'white');
+      const basePos = (s.type==='edge') ? (s.ref.aPos.clone().add(s.ref.bPos).multiplyScalar(0.5)) : s.ref.pos.clone();
+      sprite.position.copy(basePos.clone().add(new THREE.Vector3(0,0.08,0)));
+      sprite.renderOrder = 9999; sprite.material.depthTest=false;
+      scene.add(sprite); selectedLabels.push(sprite);
+      s.ref._orderSprite = sprite;
+    }
+  }
+  removeSelectionFromLastResultById(removed.id);
+  ensureLastResult();
+  lastResultJSON.data.welding_data.selections.sort((a,b)=>a.order-b.order);
+  for(let i=0;i<lastResultJSON.data.welding_data.selections.length;i++) lastResultJSON.data.welding_data.selections[i].order = i+1;
+  renderSelectionsList();
+}
+
+/* ---------- edge id helper ---------- */
+function edgeIdForPoints(a, b){
+  const mid = a.clone().add(b).multiplyScalar(0.5);
+  return `${mid.x.toFixed(4)}_${mid.y.toFixed(4)}_${mid.z.toFixed(4)}`;
+}
+
+/* ---------- highlight helpers (ensures visible orange edge) ---------- */
+function createEdgeHighlight(aPos, bPos){
+  const geom = new THREE.BufferGeometry().setFromPoints([ aPos.clone(), bPos.clone() ]);
+  const mat = new THREE.LineBasicMaterial({ color: 0xff8c00, linewidth: 3 });
+  mat.depthTest = false;
+  const line = new THREE.Line(geom, mat);
+  line.renderOrder = 9999;
+  return line;
+}
+
+/* ---------- voxel grid (full bounding box + buffer) ---------- */
+const VOXEL_RESOLUTION = 10;
+const VOXEL_BUFFER_FACTOR = 0.12;
+function createVoxelGridForObject(meshes, resolution = VOXEL_RESOLUTION){
+  if(voxelGroup){ voxelGroup.children.forEach(m=>{ scene.remove(m); disposeObject(m); }); scene.remove(voxelGroup); voxelGroup=null; voxelMeshes.length=0; }
+  const box = computeCombinedBox(meshes);
+  if(!box) return;
+  const size = box.getSize(new THREE.Vector3());
+  const maxDim = Math.max(size.x,size.y,size.z);
+  if(maxDim <= 0) return;
+  const buffer = maxDim * VOXEL_BUFFER_FACTOR;
+  box.expandByScalar(buffer);
+  const spacing = maxDim / resolution;
+  const half = 0.5;
+  const start = box.min.clone().add(new THREE.Vector3(spacing*half, spacing*half, spacing*half));
+  const end = box.max.clone().sub(new THREE.Vector3(spacing*half, spacing*half, spacing*half));
+  voxelGroup = new THREE.Group(); voxelGroup.name='voxelGrid';
+  const sphereGeo = new THREE.SphereGeometry(Math.max(spacing*0.18, spacing*0.02), 8, 6);
+  let idCounter=0;
+  const matBase = new THREE.MeshBasicMaterial({ color:0x999999 });
+  for(let x = start.x; x<=end.x + 1e-9; x+=spacing){
+    for(let y = start.y; y<=end.y + 1e-9; y+=spacing){
+      for(let z = start.z; z<=end.z + 1e-9; z+=spacing){
+        const p = new THREE.Vector3(x,y,z);
+        const m = new THREE.Mesh(sphereGeo, matBase.clone());
+        m.position.copy(p);
+        m.userData._voxelId = `vox_${idCounter++}`;
+        m.userData._selected = false;
+        voxelGroup.add(m);
+        voxelMeshes.push(m);
+      }
+    }
+  }
+  scene.add(voxelGroup);
+  console.log('Voxel grid created:', voxelMeshes.length);
+}
+
+/* ---------- voxel selection / assignment ---------- */
+function toggleVoxelSelection(mesh){
+  if(!mesh || mesh.userData._selected === undefined) return;
+  const waiter = selectedEdges.find(e => e.panelMeta && (e.panelMeta.waitForVoxel === 'A' || e.panelMeta.waitForVoxel === 'B'));
+  if(waiter){
+    const which = waiter.panelMeta.waitForVoxel;
+    assignVoxelToEdgeStart(waiter, which, mesh);
+    waiter.panelMeta.waitForVoxel = null;
+    renderSelectionsList();
+    return;
+  }
+  if(mesh.userData._selected){
+    const id = mesh.userData._voxelId;
+    removeVoxelById(id);
+  } else {
+    mesh.material.color.setHex(0xff8c00);
+    mesh.userData._selected = true;
+    const vobj = { id: mesh.userData._voxelId, mesh, pos: mesh.position.clone() };
+    selectedVoxels.push(vobj);
+    addSequenceEntry('voxel', vobj, vobj.id, mesh.position.clone());
+  }
+}
+function assignVoxelToEdgeStart(edgeObj, which, mesh){
+  if(!mesh.userData._selected){
+    mesh.material.color.setHex(0xff8c00);
+    mesh.userData._selected = true;
+    const vobj = { id: mesh.userData._voxelId, mesh: mesh, pos: mesh.position.clone() };
+    selectedVoxels.push(vobj);
+    addSequenceEntry('voxel', vobj, vobj.id, mesh.position.clone());
+  }
+  const pos = mesh.position.clone();
+  if(which==='A') edgeObj.startA = pos.clone(); else edgeObj.startB = pos.clone();
+  renderSelectionsList();
+}
+function removeVoxelById(id){
+  const idx = selectedVoxels.findIndex(v=>v.id===id);
+  if(idx!==-1){
+    const v = selectedVoxels[idx];
+    try{ v.mesh.material.color.setHex(0x999999); }catch(e){}
+    v.mesh.userData._selected = false;
+    selectedVoxels.splice(idx,1);
+  }
+  removeSequenceEntryById(id);
+}
+
+/* ---------- load OBJ handler ---------- */
+fileInput.addEventListener('change', ev=>{
+  const f = ev.target.files && ev.target.files[0]; if(!f) return;
+  const reader = new FileReader();
+  reader.onload = e=>{
+    try{
+      clearAll();
+      const loader = new OBJLoader();
+      const obj = loader.parse(e.target.result);
+      const box = new THREE.Box3().setFromObject(obj);
+      const center = box.getCenter(new THREE.Vector3());
+      obj.traverse(ch=>{
+        if(ch.isMesh){
+          ch.geometry = ch.geometry.clone();
+          ch.geometry.applyMatrix4(new THREE.Matrix4().makeTranslation(-center.x,-center.y,-center.z));
+          pickMeshes.push(ch);
+          buildVisualsFromGeometry(ch.geometry);
+        }
+      });
+      loadedObject = obj; scene.add(obj); fileNameLabel.textContent=f.name; zoomToFit(obj);
+      createVoxelGridForObject(pickMeshes, VOXEL_RESOLUTION);
+    }catch(err){ console.error(err); alert('Failed to load OBJ: '+(err&&err.message)); }
+  };
+  reader.readAsText(f);
+});
+function zoomToFit(object3d){
+  if(!object3d) return;
+  const box = new THREE.Box3().setFromObject(object3d);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const maxDim = Math.max(size.x,size.y,size.z);
+  const fov = camera.fov * Math.PI/180;
+  let cameraZ = Math.abs(maxDim/2 / Math.tan(fov/2));
+  cameraZ *= 1.6;
+  camera.position.set(center.x, center.y, center.z + cameraZ);
+  controls.target.copy(center); controls.update();
+}
+
+/* ---------- interaction: click (Shift: global start, Alt: voxel select, Ctrl: edge toggle) ---------- */
+renderer.domElement.addEventListener('click', ev=>{
+  const rect = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((ev.clientX - rect.left)/rect.width)*2 - 1;
+  mouse.y = -((ev.clientY - rect.top)/rect.height)*2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+
+  if(ev.shiftKey){
+    const originCam = camera.position.clone();
+    const ndc = new THREE.Vector3(mouse.x, mouse.y, 0.5).unproject(camera);
+    const dir = ndc.sub(camera.position).normalize();
+    const dTarget = camera.position.distanceTo(controls.target);
+    const placeDist = Math.max(0.5, dTarget * 0.6);
+    globalStartPoint = originCam.clone().add(dir.multiplyScalar(placeDist));
+    if(globalStartMarker){ scene.remove(globalStartMarker); disposeObject(globalStartMarker); }
+    globalStartMarker = new THREE.Mesh(new THREE.SphereGeometry(0.05,12,10), new THREE.MeshBasicMaterial({ color:0x8b00ff }));
+    globalStartMarker.position.copy(globalStartPoint); scene.add(globalStartMarker);
+    startGlobalInfo.textContent = `Global start: (${fmt(globalStartPoint.x)}, ${fmt(globalStartPoint.y)}, ${fmt(globalStartPoint.z)})`;
+    return;
+  }
+
+  if(ev.altKey){
+    if(!voxelGroup) return;
+    const hits = raycaster.intersectObjects(voxelGroup.children, false);
+    if(hits.length === 0) return;
+    const hit = hits[0];
+    const mesh = hit.object;
+    toggleVoxelSelection(mesh);
+    return;
+  }
+
+  if(!(ev.ctrlKey || ev.metaKey)) return;
+  if(!edgeLines) return;
+  const hits = raycaster.intersectObject(edgeLines, false);
+  if (hits.length === 0) return;
+  const hit = hits[0];
+  const posAttr = edgeLines.geometry.getAttribute('position');
+  let bestA=null,bestB=null,bestD=Infinity;
+  for(let i=0;i<posAttr.count;i+=2){
+    const a=new THREE.Vector3().fromBufferAttribute(posAttr,i);
+    const b=new THREE.Vector3().fromBufferAttribute(posAttr,i+1);
+    const mid=a.clone().add(b).multiplyScalar(0.5);
+    const d=mid.distanceTo(hit.point);
+    if(d<bestD){ bestD=d; bestA=a.clone(); bestB=b.clone(); }
+  }
+  if(!bestA || !bestB) return;
+  const id = edgeIdForPoints(bestA, bestB);
+  const already = selectedEdges.find(e=>e.id===id);
+  if(already){
+    removeEdgeById(id);
+    return;
+  }
+
+  function nearestVM(pt){
+    let best=null,bd=Infinity;
+    vertexMeshes.forEach(m=>{ const d=m.position.distanceTo(pt); if(d<bd){ bd=d; best=m; } });
+    return best;
+  }
+  const vA = nearestVM(bestA), vB = nearestVM(bestB);
+  if(!vA || !vB){ alert('Could not find vertex meshes for selected edge.'); return; }
+
+  // highlight vertex spheres (ensure unique material)
+  [vA, vB].forEach(vm=>{
+    if(vm.userData._prevColor === undefined) vm.userData._prevColor = vm.material.color.getHex();
+    if(vm.userData._baseScale === undefined) vm.userData._baseScale = vm.scale.x || 1;
+    vm.material = vm.material.clone();
+    vm.material.color.setHex(0xff8c00);
+    vm.scale.setScalar(1.6);
+    vm.userData._selected = true;
+  });
+
+  const numA = createTextSprite('A'); numA.position.copy(vA.position).add(new THREE.Vector3(0,0.12,0)); numA.scale.setScalar(0.5); scene.add(numA); selectedLabels.push(numA);
+  const numB = createTextSprite('B'); numB.position.copy(vB.position).add(new THREE.Vector3(0,0.12,0)); numB.scale.setScalar(0.5); scene.add(numB); selectedLabels.push(numB);
+
+  const edgeObj = {
+    id,
+    aMesh: vA, bMesh: vB,
+    aPos: vA.position.clone(), bPos: vB.position.clone(),
+    startA: null, startB: null,
+    manualOuterA: false, manualOuterB: false,
+    panelMeta: { waitForVoxel: null },
+    highlightLine: null,
+    _order: null,
+    _orderSprite: null
+  };
+
+  const highlightLine = createEdgeHighlight(edgeObj.aPos, edgeObj.bPos);
+  scene.add(highlightLine);
+  edgeObj.highlightLine = highlightLine;
+
+  selectedEdges.push(edgeObj);
+  const mid = edgeObj.aPos.clone().add(edgeObj.bPos).multiplyScalar(0.5);
+  addSequenceEntry('edge', edgeObj, id, mid);
+});
+
+/* ---------- per-edge UI and list rendering ---------- */
+function renderSelectionsList(){
+  edgesListContainer.innerHTML = '';
+  selectionSequence.forEach((sel, idx) => {
+    const order = idx + 1;
+    if(sel.type === 'voxel'){
+      const v = sel.ref;
+      const wrapper = document.createElement('div');
+      wrapper.style.border='1px solid #e5e7eb'; wrapper.style.padding='8px'; wrapper.style.borderRadius='8px'; wrapper.style.marginBottom='8px'; wrapper.style.background='#fff';
+      const title = document.createElement('div'); title.style.fontWeight='700'; title.textContent = `# ${order} AirPoint ${order}:`; wrapper.appendChild(title);
+      const coord = document.createElement('div'); coord.className='muted'; coord.style.marginTop='6px'; coord.textContent = `Air_point: (${fmt(v.pos.x)}, ${fmt(v.pos.y)}, ${fmt(v.pos.z)})`; wrapper.appendChild(coord);
+      const removeBtn = document.createElement('button'); removeBtn.className='ctrl-btn'; removeBtn.style.marginTop='8px'; removeBtn.textContent='Remove AirPoint';
+      removeBtn.addEventListener('click', ()=>{ removeVoxelById(v.id); });
+      wrapper.appendChild(removeBtn);
+      edgesListContainer.appendChild(wrapper);
+    } else if(sel.type === 'edge'){
+      const e = sel.ref;
+      const wrapper = document.createElement('div');
+      wrapper.style.border='1px solid #e5e7eb'; wrapper.style.padding='8px'; wrapper.style.borderRadius='8px'; wrapper.style.marginBottom='8px'; wrapper.style.background='#fff';
+      const title = document.createElement('div'); title.style.fontWeight='700'; title.textContent = `#${order} Edge ${selectedEdges.indexOf(e)+1}:`; wrapper.appendChild(title);
+      const coordsA = document.createElement('div'); coordsA.className='muted'; coordsA.style.marginTop='6px'; coordsA.textContent = `A: (${fmt(e.aPos.x)}, ${fmt(e.aPos.y)}, ${fmt(e.aPos.z)})`; wrapper.appendChild(coordsA);
+      const coordsB = document.createElement('div'); coordsB.className='muted'; coordsB.textContent = `B: (${fmt(e.bPos.x)}, ${fmt(e.bPos.y)}, ${fmt(e.bPos.z)})`; wrapper.appendChild(coordsB);
+      const rowA = document.createElement('div'); rowA.style.display='flex'; rowA.style.gap='6px'; rowA.style.marginTop='8px';
+      rowA.innerHTML = `
+        <div style="flex:1">
+          <label class="muted" style="display:block;font-size:12px">Start A (x,y,z)</label>
+          <input placeholder="x" style="width:96px;padding:6px;border-radius:6px;border:1px solid #ddd" />
+          <input placeholder="y" style="width:96px;padding:6px;border-radius:6px;border:1px solid #ddd;margin-left:6px" />
+          <input placeholder="z" style="width:96px;padding:6px;border-radius:6px;border:1px solid #ddd;margin-left:6px" />
+        </div>
+        <div style="display:flex;flex-direction:column;justify-content:center;align-items:flex-end;">
+          <label style="font-size:12px"><input type="checkbox" /> Outer-X</label>
+          <button class="ctrl-btn sel-vox-btn" style="margin-top:6px;height:34px;padding:6px 10px;font-size:12px">Select from voxel grid (A)</button>
+        </div>
+      `;
+      wrapper.appendChild(rowA);
+      const rowB = document.createElement('div'); rowB.style.display='flex'; rowB.style.gap='6px'; rowB.style.marginTop='8px';
+      rowB.innerHTML = `
+        <div style="flex:1">
+          <label class="muted" style="display:block;font-size:12px">Start B (x,y,z)</label>
+          <input placeholder="x" style="width:96px;padding:6px;border-radius:6px;border:1px solid #ddd" />
+          <input placeholder="y" style="width:96px;padding:6px;border-radius:6px;border:1px solid #ddd;margin-left:6px" />
+          <input placeholder="z" style="width:96px;padding:6px;border-radius:6px;border:1px solid #ddd;margin-left:6px" />
+        </div>
+        <div style="display:flex;flex-direction:column;justify-content:center;align-items:flex-end;">
+          <label style="font-size:12px"><input type="checkbox" /> Outer-X</label>
+          <button class="ctrl-btn sel-vox-btn" style="margin-top:6px;height:34px;padding:6px 10px;font-size:12px">Select from voxel grid (B)</button>
+        </div>
+      `;
+      wrapper.appendChild(rowB);
+      const removeBtn = document.createElement('button'); removeBtn.className='ctrl-btn'; removeBtn.style.marginTop='8px'; removeBtn.textContent='Remove Edge';
+      removeBtn.addEventListener('click', ()=>{ removeEdgeById(e.id); });
+      wrapper.appendChild(removeBtn);
+
+      const aInputs = rowA.querySelectorAll('input[placeholder]');
+      const aOuterCheckbox = rowA.querySelector('input[type=checkbox]');
+      const aSelBtn = rowA.querySelector('.sel-vox-btn');
+
+      const bInputs = rowB.querySelectorAll('input[placeholder]');
+      const bOuterCheckbox = rowB.querySelector('input[type=checkbox]');
+      const bSelBtn = rowB.querySelector('.sel-vox-btn');
+
+      if(e.startA){ aInputs[0].value = fmt(e.startA.x); aInputs[1].value = fmt(e.startA.y); aInputs[2].value = fmt(e.startA.z); }
+      if(e.startB){ bInputs[0].value = fmt(e.startB.x); bInputs[1].value = fmt(e.startB.y); bInputs[2].value = fmt(e.startB.z); }
+      aOuterCheckbox.checked = !!e.manualOuterA;
+      bOuterCheckbox.checked = !!e.manualOuterB;
+
+      function readVecFromInputs(list){
+        const x = parseFloat(list[0].value), y = parseFloat(list[1].value), z = parseFloat(list[2].value);
+        if(isFinite(x) && isFinite(y) && isFinite(z)) return new THREE.Vector3(x,y,z);
+        return null;
+      }
+      aInputs.forEach(inp => inp.addEventListener('change', ()=>{ e.startA = readVecFromInputs(aInputs); }));
+      bInputs.forEach(inp => inp.addEventListener('change', ()=>{ e.startB = readVecFromInputs(bInputs); }));
+      aOuterCheckbox.addEventListener('change', ()=>{ e.manualOuterA = aOuterCheckbox.checked; });
+      bOuterCheckbox.addEventListener('change', ()=>{ e.manualOuterB = bOuterCheckbox.checked; });
+
+      aSelBtn.addEventListener('click', ()=>{
+        clearAllWaitForVoxelFlags();
+        e.panelMeta.waitForVoxel = (e.panelMeta.waitForVoxel === 'A') ? null : 'A';
+        renderSelectionsList();
+      });
+      bSelBtn.addEventListener('click', ()=>{
+        clearAllWaitForVoxelFlags();
+        e.panelMeta.waitForVoxel = (e.panelMeta.waitForVoxel === 'B') ? null : 'B';
+        renderSelectionsList();
+      });
+
+      edgesListContainer.appendChild(wrapper);
+    }
+  });
+}
+function clearAllWaitForVoxelFlags(){
+  selectedEdges.forEach(e=>{ if(e.panelMeta) e.panelMeta.waitForVoxel = null; });
+  renderSelectionsList();
+}
+
+/* ---------- remove edge ---------- */
+function removeEdgeById(id){
+  const idx = selectedEdges.findIndex(e=>e.id===id);
+  if(idx === -1){
+    removeSequenceEntryById(id);
+    return;
+  }
+  const edge = selectedEdges[idx];
+  [edge.aMesh, edge.bMesh].forEach(m=>{
+    if(!m) return;
+    if(m.userData._prevColor!==undefined){ m.material.color.setHex(m.userData._prevColor); delete m.userData._prevColor; }
+    if(m.userData._baseScale!==undefined){ m.scale.setScalar(m.userData._baseScale); delete m.userData._baseScale; }
+    delete m.userData._selected;
+  });
+  if(edge.highlightLine){ scene.remove(edge.highlightLine); disposeObject(edge.highlightLine); edge.highlightLine = null; }
+  selectedEdges.splice(idx,1);
+  removeSequenceEntryById(id);
+  renderSelectionsList();
+
+}
+
+/* ---------- showPacket (visualize computed packet) ---------- */
 function showPacket(name, pkt){
+  if(!pkt) return;
   if(!axisMarkersGroup) axisMarkersGroup = new THREE.Group();
   if(!dashedGroup) dashedGroup = new THREE.Group();
 
@@ -393,6 +763,7 @@ function showPacket(name, pkt){
   // helper for normal axis drawing (dashed to touch, red to raw, markers + label)
   const drawAxis = (axisKey, color) => {
     const touch = pkt[`touch_${axisKey}`], raw = pkt[`raw_${axisKey}`];
+    if(!touch || !raw) return;
 
     // dashed start → touch
     const geom = new THREE.BufferGeometry().setFromPoints([ pkt.start.clone(), touch.clone() ]);
@@ -457,175 +828,141 @@ function showPacket(name, pkt){
     axisMarkersGroup.add(label); selectedLabels.push(label);
   }
 
-  scene.add(dashedGroup);
-  scene.add(axisMarkersGroup);
+  // add groups to scene if not already
+  if(!scene.children.includes(dashedGroup)) scene.add(dashedGroup);
+  if(!scene.children.includes(axisMarkersGroup)) scene.add(axisMarkersGroup);
 }
 
-/* ---------- build visuals ---------- */
-function buildVisualsFromGeometry(g){
-  const pos = g.getAttribute('position'); if(!pos) return;
-  const edgesGeom = new THREE.EdgesGeometry(g,1);
-  const edgesMat = new THREE.LineBasicMaterial({ color:0x111827 });
-  edgeLines = new THREE.LineSegments(edgesGeom, edgesMat);
-  scene.add(edgeLines);
-  const sphereGeo = new THREE.SphereGeometry(0.06,14,12);
-  for(let i=0;i<pos.count;i++){
-    const v = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
-    const mesh = new THREE.Mesh(sphereGeo, new THREE.MeshStandardMaterial({ color:0xf97316 }));
-    mesh.position.copy(v); mesh.userData._baseScale=1; scene.add(mesh); vertexMeshes.push(mesh);
-  }
-}
 
-/* ---------- load OBJ ---------- */
-fileInput.addEventListener('change', ev=>{
-  const f = ev.target.files && ev.target.files[0]; if(!f) return;
-  const reader = new FileReader();
-  reader.onload = e=>{
-    try{
-      clearAll();
-      const loader = new OBJLoader();
-      const obj = loader.parse(e.target.result);
-      const box = new THREE.Box3().setFromObject(obj);
-      const center = box.getCenter(new THREE.Vector3());
-      obj.traverse(ch=>{
-        if(ch.isMesh){
-          ch.geometry = ch.geometry.clone();
-          ch.geometry.applyMatrix4(new THREE.Matrix4().makeTranslation(-center.x,-center.y,-center.z));
-          pickMeshes.push(ch);
-          buildVisualsFromGeometry(ch.geometry);
-        }
-      });
-      loadedObject = obj; scene.add(obj); fileNameLabel.textContent=f.name; zoomToFit(obj);
-    }catch(err){ console.error(err); alert('Failed to load OBJ: '+(err&&err.message)); }
-  };
-  reader.readAsText(f);
-});
-function zoomToFit(object3d){
-  if(!object3d) return;
-  const box = new THREE.Box3().setFromObject(object3d);
-  const size = box.getSize(new THREE.Vector3());
-  const center = box.getCenter(new THREE.Vector3());
-  const maxDim = Math.max(size.x,size.y,size.z);
-  const fov = camera.fov * Math.PI/180;
-  let cameraZ = Math.abs(maxDim/2 / Math.tan(fov/2));
-  cameraZ *= 1.6;
-  camera.position.set(center.x, center.y, center.z + cameraZ);
-  controls.target.copy(center); controls.update();
-}
-
-/* ---------- interaction ---------- */
-// Shift+Click => global start in air (convenience)
-renderer.domElement.addEventListener('click', ev=>{
-  const rect = renderer.domElement.getBoundingClientRect();
-  mouse.x = ((ev.clientX - rect.left)/rect.width)*2 - 1;
-  mouse.y = -((ev.clientY - rect.top)/rect.height)*2 + 1;
-  raycaster.setFromCamera(mouse, camera);
-
-  if(ev.shiftKey){
-    const originCam = camera.position.clone();
-    const ndc = new THREE.Vector3(mouse.x, mouse.y, 0.5).unproject(camera);
-    const dir = ndc.sub(camera.position).normalize();
-    const dTarget = camera.position.distanceTo(controls.target);
-    const placeDist = Math.max(0.5, dTarget * 0.6);
-    globalStartPoint = originCam.clone().add(dir.multiplyScalar(placeDist));
-    if(globalStartMarker){ scene.remove(globalStartMarker); disposeObject(globalStartMarker); }
-    globalStartMarker = new THREE.Mesh(new THREE.SphereGeometry(0.05,12,10), new THREE.MeshBasicMaterial({ color:0x8b00ff }));
-    globalStartMarker.position.copy(globalStartPoint); scene.add(globalStartMarker);
-    startGlobalInfo.textContent = `Global start: (${fmt(globalStartPoint.x)}, ${fmt(globalStartPoint.y)}, ${fmt(globalStartPoint.z)})`;
-    return;
-  }
-
-  // Ctrl/Cmd => pick an edge and get its two endpoints A/B
-  if(!(ev.ctrlKey || ev.metaKey)) return;
-  if(!edgeLines) return;
-
-  const hits = raycaster.intersectObject(edgeLines, false);
-  if (hits.length === 0) return;
-  const hit = hits[0];
-
-  const posAttr = edgeLines.geometry.getAttribute('position');
-  let bestA=null,bestB=null,bestD=Infinity;
-  for(let i=0;i<posAttr.count;i+=2){
-    const a=new THREE.Vector3().fromBufferAttribute(posAttr,i);
-    const b=new THREE.Vector3().fromBufferAttribute(posAttr,i+1);
-    const mid=a.clone().add(b).multiplyScalar(0.5);
-    const d=mid.distanceTo(hit.point);
-    if(d<bestD){ bestD=d; bestA=a.clone(); bestB=b.clone(); }
-  }
-  if(!bestA || !bestB) return;
-
-  // existing behavior: clear visuals and highlight chosen edge (single-edge). We'll keep this but now toggle multi-edge selection.
-  // We will reuse and extend the multi-edge code in the next section (multi-edge selection below).
-});
-
-/* ---------- Set start by coordinate (A/B) ---------- */
-function setStartFromInputs(which){
-  const xs = document.getElementById(`start${which}-x`).value;
-  const ys = document.getElementById(`start${which}-y`).value;
-  const zs = document.getElementById(`start${which}-z`).value;
-  const x = parseFloat(xs), y = parseFloat(ys), z = parseFloat(zs);
-  if(!isFinite(x) || !isFinite(y) || !isFinite(z)){
-    alert(`Start ${which}: please enter valid numbers`);
-    return;
-  }
-  const p = new THREE.Vector3(x,y,z);
-  starts[which] = p;
-  manualOuter[which] = document.getElementById(`chk${which}-outer`).checked; // now means "Outer-X"
-  if(startMarkers[which]){ scene.remove(startMarkers[which]); disposeObject(startMarkers[which]); }
-  const col = manualOuter[which] ? 0xb91c1c : 0x2563eb; // outer=red-ish, inner=blue-ish
-  startMarkers[which] = new THREE.Mesh(new THREE.SphereGeometry(0.055,12,10), new THREE.MeshBasicMaterial({ color: col }));
-  startMarkers[which].position.copy(p); scene.add(startMarkers[which]);
-  document.getElementById(`start${which}-info`).textContent = `(${fmt(x)}, ${fmt(y)}, ${fmt(z)}) ${manualOuter[which] ? '· OUTER-X' : '· INNER'}`;
-}
-btnSetStartA.addEventListener('click', ()=>setStartFromInputs('A'));
-btnSetStartB.addEventListener('click', ()=>setStartFromInputs('B'));
-chkAOuter.addEventListener('change', ()=>{ manualOuter.A = chkAOuter.checked; if(starts.A && startMarkers.A){ startMarkers.A.material.color.setHex(manualOuter.A?0xb91c1c:0x2563eb); }});
-chkBOuter.addEventListener('change', ()=>{ manualOuter.B = chkBOuter.checked; if(starts.B && startMarkers.B){ startMarkers.B.material.color.setHex(manualOuter.B?0xb91c1c:0x2563eb); }});
-
-/* ---------- All-axis infinite (optional visual) ---------- */
-let modeAll=false, modeHit=false;
-function updateButtons(){ btnAll.classList.toggle('on', modeAll); btnHit.classList.toggle('on', modeHit); }
-function createAllAxisLinesForSelection(){
-  if(infiniteLinesGroup){ infiniteLinesGroup.children.forEach(disposeObject); scene.remove(infiniteLinesGroup); infiniteLinesGroup=null; }
-  infiniteLinesGroup = new THREE.Group();
-  const len=5000, colors={x:0xff0000,y:0x00a65a,z:0x0066ff};
-  const dirs=[{n:'x',v:currentBasis.x},{n:'y',v:currentBasis.y},{n:'z',v:currentBasis.z}];
-  selectedVertexMeshes.forEach(vm=>{
-    dirs.forEach(d=>{
-      const p=vm.position.clone(), dir=d.v.clone().normalize();
-      const g1=new THREE.BufferGeometry().setFromPoints([p,p.clone().add(dir.clone().multiplyScalar(len))]);
-      const g2=new THREE.BufferGeometry().setFromPoints([p,p.clone().add(dir.clone().multiplyScalar(-len))]);
-      const l1=new THREE.Line(g1,new THREE.LineBasicMaterial({ color:colors[d.n],transparent:true,opacity:0.9 }));
-      const l2=new THREE.Line(g2,new THREE.LineBasicMaterial({ color:colors[d.n],transparent:true,opacity:0.9 }));
-      infiniteLinesGroup.add(l1,l2);
-    });
-  });
-  scene.add(infiniteLinesGroup);
-}
-btnAll.addEventListener('click', ()=>{
-  modeAll = !modeAll; if(modeAll) modeHit=false; updateButtons();
-  if(selectedVertexMeshes.length){
+/* ---------- compute (path plan) ---------- */
+btnCompute.addEventListener('click', ()=>{
+  try {
+    if(selectedEdges.length === 0){
+      alert('Select one or more edges (Ctrl/Cmd+Click edges) to compute.');
+      return;
+    }
     if(axisMarkersGroup){ axisMarkersGroup.children.forEach(disposeObject); scene.remove(axisMarkersGroup); axisMarkersGroup=null; }
-    if(infiniteLinesGroup){ infiniteLinesGroup.children.forEach(disposeObject); scene.remove(infiniteLinesGroup); infiniteLinesGroup=null; }
-    if(modeAll) createAllAxisLinesForSelection();
+    if(dashedGroup){ dashedGroup.children.forEach(disposeObject); scene.remove(dashedGroup); dashedGroup=null; }
+    axisMarkersGroup = new THREE.Group(); dashedGroup = new THREE.Group();
+    const basis = { x: currentBasis.x.clone(), y: currentBasis.y.clone(), z: currentBasis.z.clone() };
+    const pathPlanEntries = [];
+    for(const edgeObj of selectedEdges){
+      const originA = edgeObj.startA ? edgeObj.startA.clone() : (globalStartPoint ? globalStartPoint.clone() : (starts.A ? starts.A.clone() : null));
+      const originB = edgeObj.startB ? edgeObj.startB.clone() : (globalStartPoint ? globalStartPoint.clone() : (starts.B ? starts.B.clone() : null));
+      if(!originA || !originB){ alert('Each edge requires Start A and Start B (per-edge, global or top-level).'); return; }
+      const packetA = computePacketForEndpoint(originA, edgeObj.aPos.clone(), pickMeshes, basis, { forceOuter: !!edgeObj.manualOuterA });
+      const packetB = computePacketForEndpoint(originB, edgeObj.bPos.clone(), pickMeshes, basis, { forceOuter: !!edgeObj.manualOuterB });
+      showPacket(`Edge`, packetA); showPacket(`Edge`, packetB);
+      pathPlanEntries.push(buildPathPlanEntry(packetA, `edge_${edgeObj.id}_A`, v3(edgeObj.aPos), v3(edgeObj.bPos)));
+      pathPlanEntries.push(buildPathPlanEntry(packetB, `edge_${edgeObj.id}_B`, v3(edgeObj.aPos), v3(edgeObj.bPos)));
+    }
+    lastResultJSON = lastResultJSON || { data: { welding_data: { edges: {}, path_plan: [], selections: [] } } };
+    lastResultJSON.data.welding_data.path_plan = pathPlanEntries;
+    computeStatus.textContent = `Computed for ${selectedEdges.length} edge(s).`;
+    scene.add(dashedGroup); scene.add(axisMarkersGroup);
+    renderSelectionsList();
+    console.log('lastResultJSON', lastResultJSON);
+  } catch (err) {
+    console.error('Compute failed:', err);
+    alert('Compute failed — see console for details: ' + (err && err.message));
   }
 });
-btnHit.addEventListener('click', ()=>{
-  modeHit = !modeHit; if(modeHit) modeAll=false; updateButtons();
-  computeStatus.textContent = modeHit ? 'Use "Compute" to see results.' : '—';
-});
 
-/* ---------- Compute 8 points for selected edge ---------- */
-let lastResultJSON = null;
+/* ---------- compute (path plan) ---------- */
+// btnCompute.addEventListener('click', ()=>{
+//   try {
+//     if(selectionSequence.length === 0){
+//       alert('Select one or more edges/airpoints (Ctrl/Cmd+Click edges, Alt+Click voxels) to compute.');
+//       return;
+//     }
+//     // clear old visuals
+//     if(axisMarkersGroup){ axisMarkersGroup.children.forEach(disposeObject); scene.remove(axisMarkersGroup); axisMarkersGroup=null; }
+//     if(dashedGroup){ dashedGroup.children.forEach(disposeObject); scene.remove(dashedGroup); dashedGroup=null; }
+//     axisMarkersGroup = new THREE.Group(); dashedGroup = new THREE.Group();
 
-/* ---------- corrected buildPathPlanEntry ---------- */
-function buildPathPlanEntry(pkt, name = "Mock_edge",pointsA, pointsB) {
+//     const basis = { x: currentBasis.x.clone(), y: currentBasis.y.clone(), z: currentBasis.z.clone() };
+//     const pathPlanEntries = [];
+//     // We'll iterate in selectionSequence order so we respect user ordering & connectivity
+//     // Track last added endpoint (string key) so if next edge's A == last B we add only B
+//     let lastAddedEndKey = null; // formatted "x_y_z" strings for comparison
+
+//     for(const sel of selectionSequence){
+//       if(sel.type === 'voxel'){
+//         // keep existing behavior for airpoints/voxels: they add 1 segment (touchfalse)
+//         const v = sel.ref;
+//         // build a small "packet-like" entry (mock) so path_plan stays consistent with earlier code
+//         const pkt = {
+//           start: v.pos.clone(),
+//           touch_X: v.pos.clone(), raw_X: v.pos.clone(),
+//           touch_Y: v.pos.clone(), raw_Y: v.pos.clone(),
+//           touch_Z: v.pos.clone(), raw_Z: v.pos.clone(),
+//           isOuterX: false,
+//           xSteps: null
+//         };
+//         pathPlanEntries.push(buildPathPlanEntry(pkt, `airpoint_${v.id}`, v3(v.pos), v3(v.pos)));
+//         // update lastAddedEndKey to this point so subsequent edges treat it as connected if equal
+//         lastAddedEndKey = `${v.pos.x.toFixed(4)}_${v.pos.y.toFixed(4)}_${v.pos.z.toFixed(4)}`;
+//         continue;
+//       }
+
+//       if(sel.type === 'edge'){
+//         const edgeObj = sel.ref;
+//         // canonicalized points for comparing connectivity (we use a formatted string)
+//         const aPos = edgeObj.aPos.clone();
+//         const bPos = edgeObj.bPos.clone();
+//         const aKey = `${aPos.x.toFixed(4)}_${aPos.y.toFixed(4)}_${aPos.z.toFixed(4)}`;
+//         const bKey = `${bPos.x.toFixed(4)}_${bPos.y.toFixed(4)}_${bPos.z.toFixed(4)}`;
+
+//         // Decide whether we are connected to previous endpoint
+//         const connectedToPrevAtA = (lastAddedEndKey !== null && lastAddedEndKey === aKey);
+
+//         if(connectedToPrevAtA){
+//           // Only compute packet for B (since A == previous B)
+//           const originB = edgeObj.startB ? edgeObj.startB.clone() : (globalStartPoint ? globalStartPoint.clone() : (starts.B ? starts.B.clone() : null));
+//           if(!originB){ alert('Each edge requires Start B (per-edge, global or top-level).'); return; }
+//           const packetB = computePacketForEndpoint(originB, bPos.clone(), pickMeshes, basis, { forceOuter: !!edgeObj.manualOuterB });
+//           showPacket(`Edge`, packetB);
+//           // make one path-plan entry naming it edge_<id>_B (preserves prior naming scheme)
+//           pathPlanEntries.push(buildPathPlanEntry(packetB, `edge_${edgeObj.id}_B`, v3(edgeObj.aPos), v3(edgeObj.bPos)));
+//           // update lastAddedEndKey to B
+//           lastAddedEndKey = bKey;
+//         } else {
+//           // Not connected — preserve previous behavior: compute both A and B and push both entries
+//           const originA = edgeObj.startA ? edgeObj.startA.clone() : (globalStartPoint ? globalStartPoint.clone() : (starts.A ? starts.A.clone() : null));
+//           const originB = edgeObj.startB ? edgeObj.startB.clone() : (globalStartPoint ? globalStartPoint.clone() : (starts.B ? starts.B.clone() : null));
+//           if(!originA || !originB){ alert('Each edge requires Start A and Start B (per-edge, global or top-level).'); return; }
+//           const packetA = computePacketForEndpoint(originA, aPos.clone(), pickMeshes, basis, { forceOuter: !!edgeObj.manualOuterA });
+//           const packetB = computePacketForEndpoint(originB, bPos.clone(), pickMeshes, basis, { forceOuter: !!edgeObj.manualOuterB });
+//           showPacket(`Edge`, packetA); showPacket(`Edge`, packetB);
+//           pathPlanEntries.push(buildPathPlanEntry(packetA, `edge_${edgeObj.id}_A`, v3(edgeObj.aPos), v3(edgeObj.bPos)));
+//           pathPlanEntries.push(buildPathPlanEntry(packetB, `edge_${edgeObj.id}_B`, v3(edgeObj.aPos), v3(edgeObj.bPos)));
+//           // update lastAddedEndKey to B (last of what we've added)
+//           lastAddedEndKey = bKey;
+//         }
+//       }
+//     } // end for selectionSequence
+
+//     // write into lastResultJSON
+//     lastResultJSON = lastResultJSON || { data: { welding_data: { edges: {}, path_plan: [], selections: [] } } };
+//     lastResultJSON.data.welding_data.path_plan = pathPlanEntries;
+//     computeStatus.textContent = `Computed for ${selectionSequence.length} selection(s).`;
+//     // add visuals
+//     scene.add(dashedGroup); scene.add(axisMarkersGroup);
+//     renderSelectionsList();
+//     console.log('lastResultJSON', lastResultJSON);
+//   } catch (err) {
+//     console.error('Compute failed:', err);
+//     alert('Compute failed — see console for details: ' + (err && err.message));
+//   }
+// });
+
+
+/* ---------- buildPathPlanEntry / packet functions ---------- */
+function buildPathPlanEntry(pkt, name="Mock_edge", pointsA, pointsB){
   const startCommon = v3(pkt.start);
   const startX = (pkt.isOuterX && pkt.xSteps) ? v3(pkt.xSteps.step2) : startCommon;
-
-  const defaultTorchStart = [1, 0, 0, 0];
-  const defaultTorchEnd   = [1, 0, 0, 0];
-  if (pkt.isOuterX && pkt.xSteps){
+  const defaultTorchStart = [1,0,0,0], defaultTorchEnd=[1,0,0,0];
+  if(pkt.isOuterX && pkt.xSteps){
     return {
       edge: name,
       id: "",
@@ -633,14 +970,13 @@ function buildPathPlanEntry(pkt, name = "Mock_edge",pointsA, pointsB) {
       torch_angle: [],
       touch_order: ['x','z','y'],
       Outer:true,
-      touch_path: {
-        x: { start_point: startCommon, end_point: v3(pkt.touch_Z), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
-        y: { start_point: startX, end_point: v3(pkt.touch_X), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
-        z: { start_point: startCommon, end_point: v3(pkt.touch_Y), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
-      },
+      touch_path:{
+        x:{ start_point: startCommon, end_point: v3(pkt.touch_Z), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
+        y:{ start_point: startX, end_point: v3(pkt.touch_X), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
+        z:{ start_point: startCommon, end_point: v3(pkt.touch_Y), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd }
+      }
     };
-  }
-  else{
+  } else {
     return {
       edge: name,
       id: "",
@@ -648,463 +984,221 @@ function buildPathPlanEntry(pkt, name = "Mock_edge",pointsA, pointsB) {
       torch_angle: [],
       touch_order: ['x','z','y'],
       Outer:false,
-      touch_path: {
-        x: { start_point: startCommon, end_point: v3(pkt.touch_X), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
-        y: { start_point: startX, end_point: v3(pkt.touch_Z), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
-        z: { start_point: startCommon, end_point: v3(pkt.touch_Y), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
-      },
+      touch_path:{
+        x:{ start_point: startCommon, end_point: v3(pkt.touch_X), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
+        y:{ start_point: startX, end_point: v3(pkt.touch_Z), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd },
+        z:{ start_point: startCommon, end_point: v3(pkt.touch_Y), start_torch_angle: defaultTorchStart, end_torch_angle: defaultTorchEnd }
+      }
     };
   }
 }
-
-/* ---------- MULTI-EDGE SELECTION + PER-EDGE UI ---------- */
-
-// container array for selected edges
-const selectedEdges = []; // entries: { id, aMesh, bMesh, aPos, bPos, panelEl, startA, startB, manualOuterA, manualOuterB }
-
-// helper: unique id for an edge (midpoint-based)
-function edgeIdForPoints(a, b){
-  const mid = a.clone().add(b).multiplyScalar(0.5);
-  return `${mid.x.toFixed(4)}_${mid.y.toFixed(4)}_${mid.z.toFixed(4)}`;
-}
-
-// create per-edge UI panel in edges-list
-const edgesListContainer = document.getElementById('edges-list');
-function renderEdgePanel(edgeObj){
-  if(edgeObj.panelEl) return;
-
-  const wrapper = document.createElement('div');
-  wrapper.style.border = '1px solid #e5e7eb';
-  wrapper.style.padding = '8px';
-  wrapper.style.borderRadius = '8px';
-  wrapper.style.marginBottom = '8px';
-  wrapper.style.background = '#fff';
-
-  const title = document.createElement('div');
-  title.style.fontWeight = '700';
-  title.textContent = `Edge ${selectedEdges.length}:`;
-  wrapper.appendChild(title);
-
-  const coordsA = document.createElement('div');
-  coordsA.className = 'muted';
-  coordsA.style.marginTop = '6px';
-  coordsA.textContent = `A: (${fmt(edgeObj.aPos.x)}, ${fmt(edgeObj.aPos.y)}, ${fmt(edgeObj.aPos.z)})`;
-  wrapper.appendChild(coordsA);
-
-  const coordsB = document.createElement('div');
-  coordsB.className = 'muted';
-  coordsB.textContent = `B: (${fmt(edgeObj.bPos.x)}, ${fmt(edgeObj.bPos.y)}, ${fmt(edgeObj.bPos.z)})`;
-  wrapper.appendChild(coordsB);
-
-  // StartA inputs
-  const rowA = document.createElement('div');
-  rowA.style.display = 'flex';
-  rowA.style.gap = '6px';
-  rowA.style.marginTop = '8px';
-  rowA.innerHTML = `
-    <div style="flex:1">
-      <label class="muted" style="display:block;font-size:12px">Start A (x,y,z)</label>
-      <input placeholder="x" style="width:96px;padding:6px;border-radius:6px;border:1px solid #ddd" />
-      <input placeholder="y" style="width:96px;padding:6px;border-radius:6px;border:1px solid #ddd;margin-left:6px" />
-      <input placeholder="z" style="width:96px;padding:6px;border-radius:6px;border:1px solid #ddd;margin-left:6px" />
-    </div>
-    <div style="display:flex;flex-direction:column;justify-content:center;align-items:flex-end;">
-      <label style="font-size:12px"><input type="checkbox" /> Outer-X</label>
-      <button class="ctrl-btn" style="margin-top:6px;height:34px;padding:6px 10px;font-size:12px">Use Global</button>
-    </div>
-  `;
-  wrapper.appendChild(rowA);
-
-  // StartB inputs
-  const rowB = document.createElement('div');
-  rowB.style.display = 'flex';
-  rowB.style.gap = '6px';
-  rowB.style.marginTop = '8px';
-  rowB.innerHTML = `
-    <div style="flex:1">
-      <label class="muted" style="display:block;font-size:12px">Start B (x,y,z)</label>
-      <input placeholder="x" style="width:96px;padding:6px;border-radius:6px;border:1px solid #ddd" />
-      <input placeholder="y" style="width:96px;padding:6px;border-radius:6px;border:1px solid #ddd;margin-left:6px" />
-      <input placeholder="z" style="width:96px;padding:6px;border-radius:6px;border:1px solid #ddd;margin-left:6px" />
-    </div>
-    <div style="display:flex;flex-direction:column;justify-content:center;align-items:flex-end;">
-      <label style="font-size:12px"><input type="checkbox" /> Outer-X</label>
-      <button class="ctrl-btn" style="margin-top:6px;height:34px;padding:6px 10px;font-size:12px">Use Global</button>
-    </div>
-  `;
-  wrapper.appendChild(rowB);
-
-  // remove button
-  const removeBtn = document.createElement('button');
-  removeBtn.className = 'ctrl-btn';
-  removeBtn.style.marginTop = '8px';
-  removeBtn.textContent = 'Remove Edge';
-  wrapper.appendChild(removeBtn);
-
-  // wire inputs
-  const aInputs = rowA.querySelectorAll('input[placeholder]');
-  const aOuterCheckbox = rowA.querySelector('input[type=checkbox]');
-  const aUseGlobal = rowA.querySelector('button');
-
-  const bInputs = rowB.querySelectorAll('input[placeholder]');
-  const bOuterCheckbox = rowB.querySelector('input[type=checkbox]');
-  const bUseGlobal = rowB.querySelector('button');
-
-  function readVecFromInputs(list){
-    const x = parseFloat(list[0].value), y = parseFloat(list[1].value), z = parseFloat(list[2].value);
-    if(isFinite(x) && isFinite(y) && isFinite(z)) return new THREE.Vector3(x,y,z);
-    return null;
-  }
-  aInputs.forEach(inp => inp.addEventListener('change', ()=>{ edgeObj.startA = readVecFromInputs(aInputs); }));
-  bInputs.forEach(inp => inp.addEventListener('change', ()=>{ edgeObj.startB = readVecFromInputs(bInputs); }));
-  aOuterCheckbox.addEventListener('change', ()=>{ edgeObj.manualOuterA = aOuterCheckbox.checked; });
-  bOuterCheckbox.addEventListener('change', ()=>{ edgeObj.manualOuterB = bOuterCheckbox.checked; });
-
-  aUseGlobal.addEventListener('click', ()=>{
-    edgeObj.startA = null; aInputs.forEach(i=>i.value=''); edgeObj.manualOuterA = false; aOuterCheckbox.checked=false;
-  });
-  bUseGlobal.addEventListener('click', ()=>{
-    edgeObj.startB = null; bInputs.forEach(i=>i.value=''); edgeObj.manualOuterB = false; bOuterCheckbox.checked=false;
-  });
-
-  removeBtn.addEventListener('click', ()=>{
-    removeEdgeById(edgeObj.id);
-  });
-
-  edgeObj.panelEl = wrapper;
-  edgesListContainer.appendChild(wrapper);
-}
-
-// utility: remove edge by id (cleanup meshes / visuals and UI)
-function removeEdgeById(id){
-  const idx = selectedEdges.findIndex(e=>e.id===id);
-  if(idx === -1) return;
-  const edge = selectedEdges[idx];
-  [edge.aMesh, edge.bMesh].forEach(m=>{
-    if(!m) return;
-    if(m.userData._prevColor!==undefined){ m.material.color.setHex(m.userData._prevColor); delete m.userData._prevColor; }
-    if(m.userData._baseScale!==undefined){ m.scale.setScalar(m.userData._baseScale); delete m.userData._baseScale; }
-    delete m.userData._selected;
-  });
-  if(edge.panelEl){ edgesListContainer.removeChild(edge.panelEl); edge.panelEl=null; }
-  selectedEdges.splice(idx,1);
-  computeStatus.textContent = `Removed edge. ${selectedEdges.length} edges selected.`;
-}
-
-// update visuals for new selection vertex highlighting
-function highlightEdgeVertices(aMesh, bMesh){
-  const purple = 0x7c3aed;
-  [aMesh, bMesh].forEach((vm, idx)=>{
-    if(!vm) return;
-    if(vm.userData._prevColor === undefined) vm.userData._prevColor = vm.material.color.getHex();
-    if(vm.userData._baseScale === undefined) vm.userData._baseScale = vm.scale.x || 1;
-    vm.material.color.setHex(purple);
-    vm.scale.setScalar(1.6);
-    vm.userData._selected = true;
-  });
-}
-
-/* ---------- replace single-edge Ctrl/Cmd click with multi-edge toggle ---------- */
-// remove old click listener and re-add a multi-edge toggle that uses edgesList
-renderer.domElement.addEventListener('click', ev=>{
-  const rect = renderer.domElement.getBoundingClientRect();
-  mouse.x = ((ev.clientX - rect.left)/rect.width)*2 - 1;
-  mouse.y = -((ev.clientY - rect.top)/rect.height)*2 + 1;
-  raycaster.setFromCamera(mouse, camera);
-
-  // SHIFT handled earlier: global start
-  if(ev.shiftKey){
-    const originCam = camera.position.clone();
-    const ndc = new THREE.Vector3(mouse.x, mouse.y, 0.5).unproject(camera);
-    const dir = ndc.sub(camera.position).normalize();
-    const dTarget = camera.position.distanceTo(controls.target);
-    const placeDist = Math.max(0.5, dTarget * 0.6);
-    globalStartPoint = originCam.clone().add(dir.multiplyScalar(placeDist));
-    if(globalStartMarker){ scene.remove(globalStartMarker); disposeObject(globalStartMarker); }
-    globalStartMarker = new THREE.Mesh(new THREE.SphereGeometry(0.05,12,10), new THREE.MeshBasicMaterial({ color:0x8b00ff }));
-    globalStartMarker.position.copy(globalStartPoint); scene.add(globalStartMarker);
-    startGlobalInfo.textContent = `Global start: (${fmt(globalStartPoint.x)}, ${fmt(globalStartPoint.y)}, ${fmt(globalStartPoint.z)})`;
-    return;
-  }
-
-  // Only proceed for Ctrl/Cmd + click (multi-edge toggle)
-  if(!(ev.ctrlKey || ev.metaKey)) return;
-  if(!edgeLines) return;
-
-  const hits = raycaster.intersectObject(edgeLines, false);
-  if (hits.length === 0) return;
-  const hit = hits[0];
-
-  const posAttr = edgeLines.geometry.getAttribute('position');
-  let bestA=null,bestB=null,bestD=Infinity;
-  for(let i=0;i<posAttr.count;i+=2){
-    const a=new THREE.Vector3().fromBufferAttribute(posAttr,i);
-    const b=new THREE.Vector3().fromBufferAttribute(posAttr,i+1);
-    const mid=a.clone().add(b).multiplyScalar(0.5);
-    const d=mid.distanceTo(hit.point);
-    if(d<bestD){ bestD=d; bestA=a.clone(); bestB=b.clone(); }
-  }
-  if(!bestA || !bestB) return;
-
-  const id = edgeIdForPoints(bestA, bestB);
-  const already = selectedEdges.find(e=>e.id===id);
-  if(already){
-    // remove if already selected
-    removeEdgeById(id);
-    return;
-  }
-
-  // add new edge entry
-  // find nearest vertex meshes
-  function nearestVM(pt){
-    let best=null,bd=Infinity;
-    vertexMeshes.forEach(m=>{ const d=m.position.distanceTo(pt); if(d<bd){ bd=d; best=m; } });
-    return best;
-  }
-  const vA = nearestVM(bestA), vB = nearestVM(bestB);
-  if(!vA || !vB){
-    alert('Could not find vertex meshes for selected edge.');
-    return;
-  }
-
-  highlightEdgeVertices(vA, vB);
-
-  const numA = createTextSprite('A'); numA.position.copy(vA.position).add(new THREE.Vector3(0,0.12,0)); numA.scale.setScalar(0.5); scene.add(numA); selectedLabels.push(numA);
-  const numB = createTextSprite('B'); numB.position.copy(vB.position).add(new THREE.Vector3(0,0.12,0)); numB.scale.setScalar(0.5); scene.add(numB); selectedLabels.push(numB);
-
-  const edgeObj = {
-    id,
-    aMesh: vA, bMesh: vB,
-    aPos: vA.position.clone(), bPos: vB.position.clone(),
-    startA: null, startB: null,
-    manualOuterA: false, manualOuterB: false,
-    panelEl: null
+function computePacketForEndpoint(startOrigin, endpointPos, targets, basis, flags){
+  const sceneBox = computeCombinedBox(targets);
+  const INF = 5000;
+  const diag = sceneBox ? sceneBox.getSize(new THREE.Vector3()).length() : INF;
+  const pz = computeAxisSearchFrom(startOrigin, basis.z, targets, sceneBox, diag, INF);
+  let px, xStepsInfo=null, isOuterX=false;
+  if(flags.forceOuter){
+    isOuterX=true;
+    const x3 = computeXOuterThreeStep(startOrigin, endpointPos, basis, targets, sceneBox, diag, INF, pz.rawCollision.clone());
+    px = { rawCollision: x3.rawCollision, search_point: x3.search_point };
+    xStepsInfo = { step1: x3.step1, step2: x3.step2 };
+  } else px = computeAxisSearchFrom(startOrigin, basis.x, targets, sceneBox, diag, INF);
+  const py = computeAxisSearchFrom(startOrigin, basis.y, targets, sceneBox, diag, INF);
+  return {
+    start: startOrigin.clone(),
+    touch_X: px.search_point.clone(), raw_X: px.rawCollision.clone(),
+    touch_Y: py.search_point.clone(), raw_Y: py.rawCollision.clone(),
+    touch_Z: pz.search_point.clone(), raw_Z: pz.rawCollision.clone(),
+    isOuterX,
+    xSteps: xStepsInfo
   };
-  selectedEdges.push(edgeObj);
-  renderEdgePanel(edgeObj);
-  computeStatus.textContent = `${selectedEdges.length} edge(s) selected.`;
-});
+}
 
+let quats_hard=null;
 
-/* ---------- Updated compute: iterate all selectedEdges ---------- */
-btnCompute.addEventListener('click', ()=>{
-  try {
-    if(selectedEdges.length === 0){
-      alert('Select one or more edges (Ctrl/Cmd+Click edges) to compute.');
-      return;
-    }
+/* ---------- SendToVision (sequence-aware) ---------- */
+// btnSendToVision.addEventListener('click', async ()=>{
+//   console.log('SendToVision clicked');
+//   if(!lastResultJSON){ alert('Compute or select some points first.'); return; }
+//   let counter=0;
+//   const VISION_SERVER = 'http://192.168.31.57:5002';
+//   const payload = { frame:'base', data:{ cycle_id:`PNC_${Date.now()}`, project_id:'PNC_MANUAL' }, segments: [] };
+//   const arrToXYZObject = arr => ({ x:Number(arr[0]), y:Number(arr[1]), z:Number(arr[2]) });
+//   const pathPlan = lastResultJSON?.data?.welding_data?.path_plan || [];
 
-    if(axisMarkersGroup){ axisMarkersGroup.children.forEach(disposeObject); scene.remove(axisMarkersGroup); axisMarkersGroup=null; }
-    if(dashedGroup){ dashedGroup.children.forEach(disposeObject); scene.remove(dashedGroup); dashedGroup=null; }
-    axisMarkersGroup = new THREE.Group(); dashedGroup = new THREE.Group();
+//   for(const sel of selectionSequence){
+//     if(sel.type === 'edge'){
+//       const matching = pathPlan.filter(p=>p.edge.includes(sel.id));
+//       for(const entry of matching){
+//         const touchPath = entry.touch_path || {};
+//         const outer = entry.Outer;
+//         const orderAxes = outer ? ['z','x','y'] : ['z','y','x'];
+//         for(const axis of orderAxes){
+//           counter++;
+//           const tp = touchPath[axis];
+//           if(!tp?.start_point || !tp?.end_point) continue;
+//           if(counter<=6) quats_hard=[0.41883,-0.34532,-0.83349,-0.10312];
+//           else if (counter>6 && counter <=12) quats_hard=[0.18237,-0.86618,-0.25317,-0.39037];
+//           else if (counter>12 && counter <=18) quats_hard=[-0.11640, -0.82168 , 0.37309, -0.41484];
+//           else if (counter>18 && counter <=24) quats_hard=[-0.38700 , -0.26871 , 0.86149 , -0.18936];
+//           payload.segments.push({
+//             start: arrToXYZObject(tp.start_point),
+//             end: arrToXYZObject(tp.end_point),
+//             q: quats_hard,
+//             touchsense: true
+//           });
+//         }
+//       }
+//     } else if(sel.type === 'voxel'){
+//       const c = sel.ref.pos || {x:0,y:0,z:0};
+//       payload.segments.push({ start: { x:c.x, y:c.z, z:c.y }, q: [0.18237,-0.86618,-0.25317,-0.39037] , touchsense: false});
+//     }
+//   }
+//   if(!payload.segments.length){ alert('No segments built — check selections.'); return; }
+//   try{
+//     const response = await fetch(`${VISION_SERVER}/api/welding_data`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload), mode:'cors' });
+//     const text = await response.text().catch(()=>'<no body>');
+//     if(response.ok){ alert('✅ Sent to vision server!'); console.log('Response:', text); } else { alert('❌ Failed to send: '+response.status+' '+response.statusText); console.error('POST failed', {status: response.status, body:text}); }
+//   }catch(err){ alert('❌ Error while sending: '+err.message); console.error(err); }
+// });
 
-    const basis = { x: currentBasis.x.clone(), y: currentBasis.y.clone(), z: currentBasis.z.clone() };
+btnSendToVision.addEventListener('click', async ()=>{
+  console.log('SendToVision clicked');
+  if(!lastResultJSON){ alert('Compute or select some points first.'); return; }
+  let counter=0;
+  const VISION_SERVER = 'http://192.168.31.58:5002';
+  const payload = { frame:'base', data:{ cycle_id:`PNC_${Date.now()}`, project_id:'PNC_MANUAL' }, segments: [] };
+  const arrToXYZObject = arr => ({ x:Number(arr[0]), y:Number(arr[1]), z:Number(arr[2]) });
+  const pathPlan = lastResultJSON?.data?.welding_data?.path_plan || [];
 
-    const pathPlanEntries = [];
+  const processedEdgeIds = new Set(); // avoid double-processing same geometric edge
 
-    for(const edgeObj of selectedEdges){
-      // Determine origins. Priority:
-      // per-edge startA/startB -> globalStartPoint -> top-level starts.A/B -> fail
-      const originA = edgeObj.startA ? edgeObj.startA.clone()
-                    : (globalStartPoint ? globalStartPoint.clone()
-                    : (starts.A ? starts.A.clone() : null));
-      const originB = edgeObj.startB ? edgeObj.startB.clone()
-                    : (globalStartPoint ? globalStartPoint.clone()
-                    : (starts.B ? starts.B.clone() : null));
+  for(const sel of selectionSequence){
+    if(sel.type === 'edge'){
+      // if this edge id was already processed (selected twice) skip it
+      if(processedEdgeIds.has(sel.id)) continue;
+      processedEdgeIds.add(sel.id);
 
-      if(!originA || !originB){
-        alert('Each edge requires Start A and Start B (either per-edge, global (Shift+Click) or top-level fields).');
-        return;
-      }
+      // explicit matching: only entries exactly named edge_<id>_A or edge_<id>_B
+      const nameA = `edge_${sel.id}_A`;
+      const nameB = `edge_${sel.id}_B`;
+      const matching = pathPlan.filter(p=> p.edge === nameA || p.edge === nameB );
 
-      // Use per-edge manualOuter flags. I kept your swapped mapping option removed/simplified:
-      const packetA = computePacketForEndpoint(originA, edgeObj.aPos.clone(), pickMeshes, basis, { forceOuter: !!edgeObj.manualOuterA });
-      const packetB = computePacketForEndpoint(originB, edgeObj.bPos.clone(), pickMeshes, basis, { forceOuter: !!edgeObj.manualOuterB });
+      for(const entry of matching){
+        const touchPath = entry.touch_path || {};
+        const outer = !!entry.Outer;
+        // keep your prior axis order logic but be explicit (outer alters order)
+        const orderAxes = outer ? ['z','x','y'] : ['z','y','x'];
+        for(const axis of orderAxes){
+          const tp = touchPath[axis];
+          if(!tp?.start_point || !tp?.end_point) continue;
+          counter++;
+          // choose quaternion as before (keeps your hard-coded behavior)
+          if(counter<=6) quats_hard=[0.41883,-0.34532,-0.83349,-0.10312];
+          else if (counter>6 && counter <=12) quats_hard=[0.18237,-0.86618,-0.25317,-0.39037];
+          else if (counter>12 && counter <=18) quats_hard=[-0.11640, -0.82168 , 0.37309, -0.41484];
+          else if (counter>18 && counter <=24) quats_hard=[-0.38700 , -0.26871 , 0.86149 , -0.18936];
 
-      showPacket(`Edge`, packetA);
-      showPacket(`Edge`, packetB);
-
-      pathPlanEntries.push(buildPathPlanEntry(packetA, `edge_${edgeObj.id}_A`, v3(edgeObj.aPos), v3(edgeObj.bPos)));
-      pathPlanEntries.push(buildPathPlanEntry(packetB, `edge_${edgeObj.id}_B`, v3(edgeObj.aPos), v3(edgeObj.bPos)));
-    }
-
-    lastResultJSON = {
-      data: {
-        welding_data: {
-          edges: {},
-          path_plan: pathPlanEntries
+          payload.segments.push({
+            start: arrToXYZObject(tp.start_point),
+            end: arrToXYZObject(tp.end_point),
+            q: quats_hard,
+            touchsense: true
+          });
         }
       }
-    };
-
-    computeStatus.textContent = `Computed for ${selectedEdges.length} edge(s).`;
-    scene.add(dashedGroup); scene.add(axisMarkersGroup);
-    console.log('lastResultJSON (multi-edge):', lastResultJSON);
-
-  } catch (err) {
-    console.error('Compute failed:', err);
-    alert('Compute failed — see console for details: ' + (err && err.message));
+    } else if(sel.type === 'voxel'){
+      const c = sel.ref.pos || {x:0,y:0,z:0};
+      // keep your voxel mapping (note: you previously did x:c.x,y:c.z,z:c.y — changed it to natural mapping)
+      payload.segments.push({ start: { x:c.x, y:c.z, z:c.y }, q: [0.18237,-0.86618,-0.25317,-0.39037] , touchsense: false});
+    }
   }
+
+  // If nothing built
+  if(!payload.segments.length){ alert('No segments built — check selections.'); return; }
+
+  // --- DEDUPE consecutive / duplicate segments (by start+end+touchsense) ---
+  // --- DEDUPE consecutive / duplicate segments (by start + optional end + touchsense) ---
+function segKey(s){
+  // start always expected
+  const sx = (s.start && isFinite(s.start.x)) ? Number(s.start.x).toFixed(4) : 'NaN';
+  const sy = (s.start && isFinite(s.start.y)) ? Number(s.start.y).toFixed(4) : 'NaN';
+  const sz = (s.start && isFinite(s.start.z)) ? Number(s.start.z).toFixed(4) : 'NaN';
+
+  // end may be absent for voxels — use a special token when missing
+  let ex = '__NOEND__', ey = '__NOEND__', ez = '__NOEND__';
+  if(s.end && isFinite(s.end.x) && isFinite(s.end.y) && isFinite(s.end.z)){
+    ex = Number(s.end.x).toFixed(4);
+    ey = Number(s.end.y).toFixed(4);
+    ez = Number(s.end.z).toFixed(4);
+  }
+
+  const touchFlag = s.touchsense ? '1' : '0';
+  return `${sx},${sy},${sz}|${ex},${ey},${ez}|${touchFlag}`;
+}
+
+const seen = new Set();
+const deduped = [];
+for(const seg of payload.segments){
+  const k = segKey(seg);
+  if(!seen.has(k)){
+    seen.add(k);
+    deduped.push(seg);
+  } else {
+    // duplicate — skipped. If you prefer to keep the later quaternion, replace above with logic to overwrite.
+    // console.log('Dropped duplicate segment:', k);
+  }
+}
+payload.segments = deduped;
+
+
+  try{
+    const response = await fetch(`${VISION_SERVER}/api/welding_data`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload), mode:'cors' });
+    const text = await response.text().catch(()=>'<no body>');
+    if(response.ok){ alert('✅ Sent to vision server!'); console.log('Response:', text); } else { alert('❌ Failed to send: '+response.status+' '+response.statusText); console.error('POST failed', {status: response.status, body:text}); }
+  }catch(err){ alert('❌ Error while sending: '+err.message); console.error(err); }
 });
 
-/* ---------- Export + Send (compat) ---------- */
-btnExport.addEventListener('click', ()=>{
-  if(!lastResultJSON){ alert('Compute first.'); return; }
-  const blob = new Blob([JSON.stringify(lastResultJSON, null, 2)], {type:'application/json'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url; a.download = 'weld_points.json'; a.click();
-  URL.revokeObjectURL(url);
-});
-
-btnSendToVision.addEventListener('click', async () => {
-  console.log('SendToVision clicked');
-  if (!lastResultJSON) {
-    alert('Compute first (no weld points yet).');
-    console.warn('lastResultJSON is empty');
+btnExport.addEventListener('click', () => {
+  if(!lastResultJSON){
+    alert('Nothing to export — compute selections first.');
     return;
   }
-  counter=0;
-
-  const VISION_SERVER = 'http://192.168.31.58:5002'; // adjust if needed
-
-  // build payload base
-  const payload = {
-    frame: 'base',
-    data: {
-      cycle_id: `PNC_${Date.now()}`,
-      project_id: 'PNC_MANUAL'
-    },
-    segments: []
-  };
-
-  try {
-    // build segments from path_plan
-    const pathPlan = (lastResultJSON && lastResultJSON.data && lastResultJSON.data.welding_data && lastResultJSON.data.welding_data.path_plan) || [];
-    if (!Array.isArray(pathPlan) || pathPlan.length === 0) {
-      alert('No path_plan entries found inside lastResultJSON — compute first.');
-      console.error('pathPlan empty', lastResultJSON);
-      return;
-    }
-
-    for (const entry of pathPlan) {
-      const edgeName = entry.edge || '<unknown>';
-      const touchPath = entry.touch_path || {};
-      const outer=entry.Outer
-      if(outer){
-        ['z','x','y'].forEach(axis => {
-          counter++;
-          const tp = touchPath[axis];
-          if (!tp || !tp.start_point || !tp.end_point) return;
-
-          // If your server expects real-world [x,y,z] rather than v3([z,x,y]) reorder here.
-          // Current v3 returns [z,x,y] arrays; convert to [x,y,z] if needed:
-          const reorderIfV3 = arr => {
-            if (!Array.isArray(arr) || arr.length < 3) return arr;
-            return [arr[0], arr[1], arr[2]];
-          };
-
-          const startArr = reorderIfV3(tp.start_point);
-          const endArr   = reorderIfV3(tp.end_point);
-
-          function arrToXYZObject(arr) {
-            if (!Array.isArray(arr) || arr.length < 3) return { x: 0, y: 0, z: 0 };
-            return {
-              x: Number(arr[0]),
-              y: Number(arr[1]), // swap y <-> z
-              z: Number(arr[2]),
-            };
-          }
-          console.log("Counter : ",counter);
-          payload.segments.push({
-            start: arrToXYZObject(startArr),
-            end: arrToXYZObject(endArr),
-            // q: counter>3 ? [-0.38255,-0.30268,0.84649,-0.21330] : [-0.07862,-0.84578,0.30464,-0.43089],
-            // q:[0.41883,-0.34532,-0.83349,-0.10312],
-            // q: [0.18237,-0.86618,-0.25317,-0.39037],
-            q: counter>6 ? [0.18237,-0.86618,-0.25317,-0.39037] : [0.41883,-0.34532,-0.83349,-0.10312],
-            touchsense: true,
-          });   
-        });
-      }
-      else{
-        ['z','y','x'].forEach(axis => {
-          counter++;
-          const tp = touchPath[axis];
-          if (!tp || !tp.start_point || !tp.end_point) return;
-
-          // If your server expects real-world [x,y,z] rather than v3([z,x,y]) reorder here.
-          // Current v3 returns [z,x,y] arrays; convert to [x,y,z] if needed:
-          const reorderIfV3 = arr => {
-            if (!Array.isArray(arr) || arr.length < 3) return arr;
-            return [arr[0], arr[1], arr[2]];
-          };
-
-          const startArr = reorderIfV3(tp.start_point);
-          const endArr   = reorderIfV3(tp.end_point);
-
-          function arrToXYZObject(arr) {
-            if (!Array.isArray(arr) || arr.length < 3) return { x: 0, y: 0, z: 0 };
-            return {
-              x: Number(arr[0]),
-              y: Number(arr[1]), // swap y <-> z
-              z: Number(arr[2]),
-            };
-          }
-
-          payload.segments.push({
-            start: arrToXYZObject(startArr),
-            end: arrToXYZObject(endArr),
-            // q: counter>3 ? [-0.38255,-0.30268,0.84649,-0.21330] : [-0.07862,-0.84578,0.30464,-0.43089],
-            // q:[0.41883,-0.34532,-0.83349,-0.10312],
-            // q: [0.18237,-0.86618,-0.25317,-0.39037],
-            q: counter>6 ? [0.18237,-0.86618,-0.25317,-0.39037] : [0.41883,-0.34532,-0.83349,-0.10312],
-            touchsense: true,
-          });
-        });
-      }
-    }
-
-    console.log('Prepared payload:', payload);
-    if (!payload.segments.length) {
-      alert('Payload has zero segments after building — check path_plan structure.');
-      console.error('Empty segments', lastResultJSON);
-      return;
-    }
-
-    const sendUrl = `${VISION_SERVER}/api/welding_data`;
-    console.log('Sending to', sendUrl, 'segments:', payload.segments.length);
-
-    const response = await fetch(sendUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      mode: 'cors',
-      body: JSON.stringify(payload)
-    });
-
-    console.log('Fetch completed. status=', response.status, response.statusText);
-    let text;
-    try { text = await response.text(); } catch(e){ text = '<no body>'; }
-    console.log('Response body (text):', text);
-
-    if (response.ok) {
-      alert('✅ Sent to vision server!');
-      try { const j = JSON.parse(text); console.log('Response JSON:', j); } catch(e){ console.log('Non-JSON response: ', text); }
-    } else {
-      alert('❌ Failed to send: ' + response.status + ' ' + response.statusText + '\nSee console for details.');
-      console.error('POST failed', { status: response.status, statusText: response.statusText, body: text });
-      if (response.status === 0) console.warn('Possible CORS or network error — check server and browser console (Network tab).');
-    }
-
-  } catch (err) {
-    alert('❌ Error while sending: ' + (err && err.message));
-    console.error('Error in SendToVision:', err);
+  try{
+    const json = JSON.stringify(lastResultJSON, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'welding_data.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    console.log('Exported welding_data.json');
+  }catch(err){
+    console.error('Export failed:', err);
+    alert('Export failed — see console.');
   }
 });
+
+/* ---------- SendToVision (sequence-aware) — dedupe consecutive identical segments ---------- */
+
+/* ---------- voxel toggle button ---------- */
+let voxelsVisible = true;
+btnToggleVoxels.addEventListener('click', ()=>{
+  voxelsVisible = !voxelsVisible;
+  if(voxelGroup) voxelGroup.visible = voxelsVisible;
+  btnToggleVoxels.textContent = voxelsVisible ? 'Hide Voxel Grid' : 'Show Voxel Grid';
+  btnToggleVoxels.classList.toggle('on', voxelsVisible);
+});
+
+/* ---------- helpers used earlier ---------- */
+// function removeSelectionFromLastResultById(id){ if(!lastResultJSON || !lastResultJSON.data || !lastResultJSON.data.welding_data) return; const sel = lastResultJSON.data.welding_data.selections; const idx = sel.findIndex(s=>s.id===id); if(idx!==-1) sel.splice(idx,1); for(const s of lastResultJSON.data.welding_data.selections){ const seqIdx = selectionSequence.findIndex(x=>x.id===s.id); s.order = seqIdx===-1? s.order : (seqIdx+1); } }
 
 /* ---------- resize + animate ---------- */
 window.addEventListener('resize', ()=>{
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight);
 });
 (function animate(){ requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera); })();
