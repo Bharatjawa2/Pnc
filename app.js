@@ -1002,7 +1002,7 @@ if (btnSendToVision) {
     console.log('SendToVision clicked');
     if (!lastResultJSON) { alert('Compute or select some points first.'); return; }
     let counter = 0;
-    const VISION_SERVER = 'http://192.168.31.57:5002';
+    const VISION_SERVER = 'http://192.168.31.58:5002';
     const payload = { frame: 'base', data: { cycle_id: `PNC_${Date.now()}`, project_id: 'PNC_MANUAL' }, segments: [] };
     const arrToXYZObject = arr => ({ x: Number(arr[0]), y: Number(arr[1]), z: Number(arr[2]) });
     const pathPlan = lastResultJSON?.data?.welding_data?.path_plan || [];
