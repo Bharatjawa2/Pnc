@@ -43,6 +43,49 @@ const edgesListContainer = document.getElementById('edges-list');
 const rightSidebar = document.getElementById('right-sidebar');
 const sidebarToggle = document.getElementById('sidebar-toggle');
 
+const visionInput = document.getElementById('vision-input');
+const btnSetVision = document.getElementById('btn-set-vision');
+
+let VISION_SERVER = 'http://192.168.31.58:5002';
+
+function normalizeVisionUrl(raw) {
+  if (!raw) return null;
+  let s = raw.trim();
+  if (!/^https?:\/\//i.test(s)) s = 'http://' + s;
+  try {
+    const u = new URL(s);
+    // return origin (protocol + host + port) to avoid stray paths
+    return u.origin;
+  } catch (e) {
+    return null;
+  }
+}
+
+if (visionInput) visionInput.value = VISION_SERVER;
+
+if (btnSetVision && visionInput) {
+  btnSetVision.addEventListener('click', () => {
+    const raw = visionInput.value;
+    let norm = normalizeVisionUrl(raw);
+    if (!norm) { alert('Invalid URL. Example: 192.168.31.58:5002 or http://192.168.31.58:5002'); return; }
+    if (location.protocol === 'https:' && norm.startsWith('http://')) {
+      const httpsCandidate = norm.replace(/^http:\/\//i, 'https://');
+      if (confirm(`Your site is HTTPS. Browser will block HTTP requests. Try setting vision server to:\n\n${httpsCandidate}\n\n(Select Cancel to keep HTTP instead.)`)) {
+        norm = httpsCandidate;
+      } else {
+        alert('Note: calling an http:// server from an https page will be blocked by browsers when deployed.');
+      }
+    }
+  });
+
+  visionInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      btnSetVision.click();
+    }
+  });
+}
+
 /* ---------- small housekeeping: remove pasted debug block if present ---------- */
 /* The user pasted a textual dump like:
    "sis (choose X & Z) X +X (1, 0, 0) Z +Z (0, 0, 1) Y (0, 1, 0) Start A ... Tip: Shift+Click ..."
@@ -1002,7 +1045,7 @@ if (btnSendToVision) {
     console.log('SendToVision clicked');
     if (!lastResultJSON) { alert('Compute or select some points first.'); return; }
     let counter = 0;
-    const VISION_SERVER = 'http://192.168.31.58:5002';
+    // const VISION_SERVER = 'http://192.168.31.58:5002';
     const payload = { frame: 'base', data: { cycle_id: `PNC_${Date.now()}`, project_id: 'PNC_MANUAL' }, segments: [] };
     const arrToXYZObject = arr => ({ x: Number(arr[0]), y: Number(arr[1]), z: Number(arr[2]) });
     const pathPlan = lastResultJSON?.data?.welding_data?.path_plan || [];
