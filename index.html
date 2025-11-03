@@ -4,22 +4,105 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>3D Viewer — Axis Controls</title>
+
+  <!-- Simple system font stack -->
   <style>
-    html,body { height:100%; margin:0; font-family: Inter, system-ui, Arial, sans-serif; background:#f8fafc; color:#111; }
-    #canvas-container { width:100%; height:100vh; overflow:hidden; position:relative; }
-    #header { position:absolute; top:0; left:0; width:100%; height:68px; background:white; box-shadow:0 2px 6px rgba(0,0,0,0.08); display:flex; align-items:center; justify-content:space-between; padding:0 18px; z-index:25; }
-    #controls { position:absolute; right:18px; top:86px; display:flex; gap:8px; z-index:30; flex-wrap:wrap; }
-    .ctrl-btn { padding:10px 12px; background:white; border-radius:8px; border:1px solid #ddd; cursor:pointer; font-weight:700; box-shadow:0 6px 18px rgba(0,0,0,0.06); }
-    .ctrl-btn.on { background:#3b82f6; color:white; border-color:#2563eb; }
-    #file-label { background:#10b981; color:white; padding:8px 12px; border-radius:8px; cursor:pointer; font-weight:700; }
-    #file-name { font-size:13px; color:#374151; margin-left:12px; }
-    .panel { position:absolute; left:18px; top:86px; z-index:30; background:white; border:1px solid #e5e7eb; border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,0.06); padding:12px 14px; min-width:340px; max-width:420px; }
-    .row { display:flex; gap:8px; align-items:center; margin:6px 0; }
-    .row label { font-size:13px; color:#374151; }
-    .row input[type="number"] { width:92px; padding:6px 8px; border:1px solid #d1d5db; border-radius:8px; }
-    .muted { color:#6b7280; font-size:12px; }
-    hr { border:none; height:1px; background:#e5e7eb; margin:10px 0; }
-    .waiting { background:#fef3c7 !important; border-color:#f59e0b !important; }
+    :root{
+      --panel-w: 380px;
+      --header-h: 68px;
+      --accent: #6d28d9;
+      --muted: #6b7280;
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --shadow: 0 8px 28px rgba(15,23,42,0.06);
+      --radius: 12px;
+    }
+
+    html,body{ height:100%; margin:0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; background:var(--bg); color:#0f172a; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
+
+    /* header */
+    #header{
+      position:fixed; top:0; left:0; right:0; height:var(--header-h);
+      display:flex; align-items:center; justify-content:space-between;
+      padding:0 20px; background:linear-gradient(180deg, rgba(255,255,255,0.92), rgba(255,255,255,0.86));
+      backdrop-filter: blur(6px); box-shadow:0 1px 0 rgba(0,0,0,0.04);
+      z-index:60;
+    }
+    #header .brand { font-weight:800; font-size:18px; letter-spacing:0.4px; color:#111827; display:flex; align-items:center; gap:12px; }
+    #header .file-area { display:flex; align-items:center; gap:10px; }
+    #file-label { background:#10b981; color:white; padding:8px 12px; border-radius:10px; cursor:pointer; font-weight:700; font-size:13px; box-shadow:var(--shadow); border:0; }
+    #file-name { font-size:13px; color:#374151; margin-left:8px; max-width:360px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+    /* layout */
+    .layout {
+      display:grid;
+      grid-template-columns: 1fr var(--panel-w);
+      grid-template-rows: var(--header-h) 1fr;
+      height:100vh;
+      gap:0;
+    }
+
+    /* canvas area */
+    #canvas-container {
+      grid-column:1 / 2; grid-row:2 / 3;
+      position:relative; overflow:hidden;
+      background:var(--bg);
+    }
+
+    /* right sidebar */
+    .sidebar {
+      grid-column:2 / 3; grid-row:2 / 3;
+      padding:18px; box-sizing:border-box;
+      background:linear-gradient(180deg, rgba(255,255,255,0.96), rgba(255,255,255,0.94));
+      border-left:1px solid #eef2f7; box-shadow:var(--shadow);
+      overflow:auto; z-index:55;
+    }
+    .sidebar .panel { background:var(--card); padding:14px; border-radius:var(--radius); box-shadow:0 6px 20px rgba(16,24,40,0.04); }
+    .sidebar h4 { margin:0 0 8px 0; font-size:13px; font-weight:800; color:#0f172a; }
+    .muted { color:var(--muted); font-size:12px; }
+
+    /* compact rows */
+    .row { display:flex; gap:8px; align-items:center; margin:8px 0; }
+    .row label { font-size:13px; color:#374151; min-width:56px; display:inline-block; }
+    .inputs { display:flex; gap:8px; align-items:center; }
+
+    input[type="number"], input[type="text"], select {
+      padding:6px 8px; border-radius:8px; border:1px solid #e6e9ef; font-size:13px; min-width:88px;
+      background:#fff; box-shadow:inset 0 -1px 0 rgba(15,23,42,0.02);
+    }
+    select { -webkit-appearance: menulist-button; }
+
+    .ctrl-row { display:flex; gap:8px; align-items:center; margin-top:10px; flex-wrap:wrap; }
+    .ctrl-btn { padding:8px 10px; background:var(--card); border-radius:10px; border:1px solid #e6e9ef; cursor:pointer; font-weight:700; font-size:13px; box-shadow:0 6px 18px rgba(2,6,23,0.04); }
+    .ctrl-btn.on { background:var(--accent); color:white; border-color: #4c1d95; }
+    .btn-primary { background:var(--accent); color:white; border:0; }
+    .small { padding:6px 8px; font-size:12px; }
+
+    hr { border:none; height:1px; background:#eef2f7; margin:12px 0; }
+
+    /* edges list styling */
+    #edges-list { margin-top:8px; max-height:calc(100vh - 420px); overflow:auto; }
+
+    /* per-item card */
+    .item-card { border:1px solid #eef2f7; padding:8px; border-radius:10px; background:#fff; margin-bottom:10px; }
+    .item-card .coords { font-size:12px; color:var(--muted); margin-top:6px; }
+
+    /* collapse toggle */
+    #sidebar-toggle {
+      position:fixed; right:var(--panel-w); top:calc(var(--header-h) + 18px);
+      transform:translateX(8px); z-index:70;
+      width:36px; height:36px; border-radius:10px; border:1px solid #eef2f7; background:white; display:flex; align-items:center; justify-content:center; cursor:pointer;
+      box-shadow:0 6px 20px rgba(2,6,23,0.06);
+    }
+    #sidebar-toggle svg { width:18px; height:18px; color:var(--muted); }
+
+    /* responsive: collapse panel under 960px */
+    @media (max-width: 960px) {
+      :root { --panel-w: 320px; }
+      .layout { grid-template-columns: 1fr; grid-template-rows: var(--header-h) 1fr; }
+      .sidebar { position:fixed; right:0; top:var(--header-h); bottom:0; width:var(--panel-w); transform:translateX(0); box-shadow:var(--shadow); }
+      #sidebar-toggle { right: 8px; top: calc(var(--header-h) + 8px); }
+    }
   </style>
 
   <script type="importmap">
@@ -34,104 +117,61 @@
 <body>
   <div id="header">
     <div style="display:flex; align-items:center; gap:12px;">
-      <div style="font-weight:800; font-size:18px;">TERAFAC</div>
-      <label id="file-label" for="file-input" style="margin-left:12px;">Import OBJ</label>
+      <div class="brand">TERAFAC</div>
+      <label id="file-label" for="file-input">Import OBJ</label>
       <input id="file-input" type="file" accept=".obj" style="display:none" />
       <div id="file-name">No file loaded</div>
     </div>
-    <div style="padding-right:18px"></div>
-  </div>
-
-  <div class="panel">
-    <div class="row"><strong>Basis (choose X &amp; Z):</strong></div>
-    <div class="row">
-      <label>X</label>
-      <select id="sel-x">
-        <option>+X</option><option>-X</option>
-        <option selected>+Y</option><option>-Y</option>
-        <option>+Z</option><option>-Z</option>
-      </select>
-      <span id="x-info" class="muted"></span>
-    </div>
-    <div class="row">
-      <label>Z</label>
-      <select id="sel-z">
-        <option>+X</option><option>-X</option>
-        <option>+Y</option><option>-Y</option>
-        <option>+Z</option><option selected>-Z</option>
-      </select>
-      <span id="z-info" class="muted"></span>
-    </div>
-    <div class="row"><label>Y = X × Z</label><span id="y-info" class="muted"></span></div>
-    <hr/>
-
-    <div class="row"><strong>Start A</strong></div>
-    <div class="row" style="gap:4px; justify-content:space-between;">
-      <div style="display:flex; flex-direction:column; align-items:left;">
-        <label class="muted">X   (Real World Z)</label>
-        <input id="startA-x" type="number" step="0.001" placeholder="x">
-      </div>
-      <div style="display:flex; flex-direction:column; align-items:left;">
-        <label class="muted">Y   (Real World X)</label>
-        <input id="startA-y" type="number" step="0.001" placeholder="y">
-      </div>
-      <div style="display:flex; flex-direction:column; align-items:left;">
-        <label class="muted">Z   (Real World Y)</label>
-        <input id="startA-z" type="number" step="0.001" placeholder="z">
-      </div>
-      <button id="btn-set-startA" class="ctrl-btn" style="height:48px;">Set A</button>
-    </div>
-    <div class="row">
-      <label><input id="chkA-outer" type="checkbox"> Mark A as <b>Outer</b></label>
-      <span id="startA-info" class="muted">—</span>
-    </div>
-
-    <div class="row" style="margin-top:8px;"><strong>Start B</strong></div>
-    <div class="row" style="gap:4px; justify-content:space-between;">
-      <div style="display:flex; flex-direction:column; align-items:left;">
-        <label class="muted">X   (Real World Z)</label>
-        <input id="startB-x" type="number" step="0.001" placeholder="x">
-      </div>
-      <div style="display:flex; flex-direction:column; align-items:left;">
-        <label class="muted">Y   (Real World X)</label>
-        <input id="startB-y" type="number" step="0.001" placeholder="y">
-      </div>
-      <div style="display:flex; flex-direction:column; align-items:left;">
-        <label class="muted">Z   (Real World Y)</label>
-        <input id="startB-z" type="number" step="0.001" placeholder="z">
-      </div>
-      <button id="btn-set-startB" class="ctrl-btn" style="height:48px;">Set B</button>
-    </div>
-    <div class="row">
-      <label><input id="chkB-outer" type="checkbox"> Mark B as <b>Outer</b></label>
-      <span id="startB-info" class="muted">—</span>
-    </div>
-
-    <div class="row" style="margin-top:6px;">
-      <span class="muted">Tip: <b>Shift+Click</b> in the viewport to place a global start (in the air). <b>Ctrl/Cmd+Click</b> to toggle edges (multi-select).</span>
-    </div>
-    <div class="row"><span id="start-global-info" class="muted">—</span></div>
-
-    <!-- NEW: per-edge panels -->
-    <hr/>
-    <div id="edges-list" style="max-height:220px; overflow:auto; margin-bottom:8px;"></div>
-
-    <hr/>
-    <div class="row">
-      <button id="btn-compute" class="ctrl-btn">Compute</button>
-      <button id="btn-export" class="ctrl-btn">Export JSON</button>
-      <span id="compute-status" class="muted">—</span>
-      <button id="btn-send-vision" class="ctrl-btn" style="background:#8b5cf6;">Send to Vision</button>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <button id="btn-toggle-voxels" class="ctrl-btn small">Hide Voxel Grid</button>
     </div>
   </div>
 
-  <div id="controls">
-    <button id="btn-all" class="ctrl-btn">Show All Axis Lines</button>
-    <button id="btn-hit" class="ctrl-btn">Show Hit Axis Lines</button>
-    <button id="btn-toggle-voxels" class="ctrl-btn">Hide Voxel Grid</button>
+  <div class="layout">
+    <div id="canvas-container"></div>
+    
+    <aside class="sidebar" id="right-sidebar" aria-label="Controls" style="width: 400px;">
+       <h2 style="margin-top: 0; font-size: 1.2rem; font-weight: 600; color: #111827;">🧭 Instructions</h2>
+
+    <ul style="list-style-type: disc; padding-left: 20px; color: #374151; line-height: 1.6;">
+      <li>Click <strong>Compute</strong> after selecting all edges.</li>
+      <li><strong>Command + Click</strong> — Select multiple edges.</li>
+      <li><strong>Option + Click</strong> — Select an air point.</li>
+      <li>After selecting Edges and Air Points, <strong>click on COMPUTE</strong></li>
+    </ul>
+      <div class="panel">
+         <div style="margin-top:10px;" id="start-global-info" class="muted">—</div>
+      </div>
+      <!-- edges panel -->
+      <div style="margin-top:12px;" class="panel">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <h4 style="margin:0">Selections</h4>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button id="btn-compute" class="ctrl-btn btn-primary small">Compute</button>
+            <button id="btn-export" class="ctrl-btn small">Export</button>
+          </div>
+        </div>
+
+        <div id="edges-list"></div>
+
+        <hr/>
+        <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;">
+          <div class="muted" id="compute-status">—</div>
+          <div style="display:flex;gap:8px;">
+            <button id="btn-send-vision" class="ctrl-btn small" style="background:#8b5cf6;color:white;border:0;">Send to Vision</button>
+          </div>
+        </div>
+      </div>
+    </aside>
   </div>
 
-  <div id="canvas-container"></div>
+  <!-- collapse toggle (JS will toggle the sidebar) -->
+  <button id="sidebar-toggle" title="Toggle sidebar" aria-label="Toggle sidebar" style="margin-right: 40px;">
+    <!-- chevron left/right -->
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path id="sidebar-toggle-icon" d="M15 18l-6-6 6-6"/>
+    </svg>
+  </button>
 
   <script type="module" src="./app.js"></script>
 </body>
